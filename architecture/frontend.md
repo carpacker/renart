@@ -352,6 +352,12 @@ not underscore-flattened route hacks.
   **Overlapping pipeline runs** (`concurrency`) from **Maximum active steps**
   (`max_active_steps`). A blank step value explains the sequential default;
   values above one opt safe independent assets into bounded overlap.
+  Connections show both editable platform defaults and a read-only,
+  asset-grouped inventory of every effective source/target connection resolved
+  by the backend. Variables use JSON-schema type choices and type-aware default
+  controls (numeric, boolean, string-list, or JSON object) so saved defaults
+  retain their value types. Go to definition on `var.name` opens this Variables
+  section, scrolls to the matching definition, and highlights it.
   Run details use semantic event badges, link current-workspace asset events
   back to the split Build view, and render timeline asset names in a dedicated
   wrapping column with tooltips so short duration bars never truncate identity.

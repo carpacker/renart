@@ -339,8 +339,13 @@ name: analytics
     await expect(inferred).toContainText("duckdb");
     await expect(inferred).toContainText("duckdb-default");
     await expect(inferred).toContainText("Inferred");
+    const referenced = dialog
+      .getByTestId("referenced-pipeline-connection")
+      .filter({ hasText: "duckdb-default" });
+    await expect(referenced).toBeVisible();
+    await expect(referenced).toContainText("analytics.customers");
 
-    await dialog
+    await inferred
       .getByRole("link", { name: "Open duckdb-default in project connection settings" })
       .click();
     await expect(page).toHaveURL(/\/project\/connections[?].*connection=duckdb-default/);

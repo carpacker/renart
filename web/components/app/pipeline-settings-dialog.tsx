@@ -28,8 +28,17 @@ import {
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 import {
   getPipelineConfig,
   getPipelinePythonDependencies,
@@ -57,6 +66,7 @@ const pipelineSettingsSections = [
 export type PipelineSettingsSection = (typeof pipelineSettingsSections)[number]["id"];
 
 type PipelineConfigDraft = UpdatePipelineConfigRequest;
+type ReferencedConnection = { name: string; assets: string[] };
 
 // Pipeline settings live in pipeline.yml, while Python dependencies live in the
 // pipeline-root pyproject.toml. Both write through Go endpoints and SSE then
@@ -66,11 +76,13 @@ export function PipelineSettingsDialog({
   onOpenChange,
   pipelineId,
   initialSection,
+  highlightedVariable,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   pipelineId: string;
   initialSection?: PipelineSettingsSection;
+  highlightedVariable?: string;
 }) {
   const [section, setSection] = useState<PipelineSettingsSection>(initialSection ?? "general");
   const [draft, setDraft] = useState<PipelineConfigDraft | null>(null);
@@ -80,6 +92,7 @@ export function PipelineSettingsDialog({
   const [inferredDefaultConnections, setInferredDefaultConnections] = useState<
     PipelineConfigConnection[]
   >([]);
+  const [referencedConnections, setReferencedConnections] = useState<ReferencedConnection[]>([]);
   const [pythonDependencies, setPythonDependencies] = useState<string[]>([]);
   const [initialPythonDependencies, setInitialPythonDependencies] = useState<string[]>([]);
   const [pythonDependencyPath, setPythonDependencyPath] = useState("");
@@ -93,6 +106,7 @@ export function PipelineSettingsDialog({
     setLoading(true);
     setDraft(null);
     setInferredDefaultConnections([]);
+    setReferencedConnections([]);
     setPythonDependencies([]);
     setInitialPythonDependencies([]);
     setPythonDependencyPath("");
@@ -105,6 +119,7 @@ export function PipelineSettingsDialog({
           const config = configResult.value;
           setDraft(configResponseToDraft(config));
           setInferredDefaultConnections(config.inferred_default_connections ?? []);
+          setReferencedConnections(config.referenced_connections ?? []);
         } else {
           messages.push(errorMessage(configResult.reason, "Failed to load pipeline settings."));
         }
@@ -149,6 +164,7 @@ export function PipelineSettingsDialog({
       ]);
       setDraft(configResponseToDraft(response));
       setInferredDefaultConnections(response.inferred_default_connections ?? []);
+      setReferencedConnections(response.referenced_connections ?? []);
       if (dependencyResponse) {
         setPythonDependencies(dependencyResponse.dependencies);
         setInitialPythonDependencies(dependencyResponse.dependencies);
@@ -161,6 +177,19 @@ export function PipelineSettingsDialog({
       setSaving(false);
     }
   };
+
+  useEffect(() => {
+    if (!open || loading || section !== "variables" || !highlightedVariable) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      const target = Array.from(
+        document.querySelectorAll<HTMLElement>("[data-pipeline-variable]"),
+      ).find((element) => element.dataset.pipelineVariable === highlightedVariable);
+      target?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [draft, highlightedVariable, loading, open, section]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -226,6 +255,8 @@ export function PipelineSettingsDialog({
                       draft={draft}
                       update={update}
                       inferredDefaultConnections={inferredDefaultConnections}
+                      referencedConnections={referencedConnections}
+                      highlightedVariable={highlightedVariable}
                       pythonDependencies={pythonDependencies}
                       onPythonDependenciesChange={setPythonDependencies}
                       pythonDependencyPath={pythonDependencyPath}
@@ -314,6 +345,8 @@ function PipelineSettingsSectionBody({
   draft,
   update,
   inferredDefaultConnections,
+  referencedConnections,
+  highlightedVariable,
   pythonDependencies,
   onPythonDependenciesChange,
   pythonDependencyPath,
@@ -322,6 +355,8 @@ function PipelineSettingsSectionBody({
   draft: PipelineConfigDraft;
   update: <K extends keyof PipelineConfigDraft>(key: K, value: PipelineConfigDraft[K]) => void;
   inferredDefaultConnections: PipelineConfigConnection[];
+  referencedConnections: ReferencedConnection[];
+  highlightedVariable?: string;
   pythonDependencies: string[];
   onPythonDependenciesChange: (value: string[]) => void;
   pythonDependencyPath: string;
@@ -442,7 +477,7 @@ function PipelineSettingsSectionBody({
   }
   if (section === "connections") {
     return (
-      <div className="space-y-3">
+      <FieldGroup className="gap-3">
         <p className="text-xs text-muted-foreground">
           Default connection per platform. Assets that don&apos;t name a connection use these.
         </p>
@@ -510,8 +545,45 @@ function PipelineSettingsSectionBody({
           <Plus className="size-3.5" />
           Add connection
         </Button>
+        {referencedConnections.length > 0 ? (
+          <div className="grid gap-2 border-t pt-3">
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Used by assets
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Effective source and target connections resolved across this pipeline.
+              </p>
+            </div>
+            {referencedConnections.map((connection) => (
+              <div
+                key={connection.name}
+                data-testid="referenced-pipeline-connection"
+                className="flex min-w-0 items-center gap-3 rounded-md border bg-muted/30 px-3 py-2"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-mono text-xs">{connection.name}</div>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {connection.assets.slice(0, 3).map((assetName) => (
+                      <Badge key={assetName} variant="secondary" className="max-w-full font-mono">
+                        <span className="truncate">{assetName}</span>
+                      </Badge>
+                    ))}
+                    {connection.assets.length > 3 ? (
+                      <Badge variant="outline">+{connection.assets.length - 3}</Badge>
+                    ) : null}
+                  </div>
+                </div>
+                <PipelineConnectionSettingsLink
+                  environment={environment}
+                  connection={connection.name}
+                />
+              </div>
+            ))}
+          </div>
+        ) : null}
         {inferredDefaultConnections.length > 0 ? (
-          <div className="space-y-2 border-t pt-3">
+          <div className="grid gap-2 border-t pt-3">
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                 Inferred defaults
@@ -547,7 +619,7 @@ function PipelineSettingsSectionBody({
             ))}
           </div>
         ) : null}
-      </div>
+      </FieldGroup>
     );
   }
   if (section === "python") {
@@ -575,57 +647,64 @@ function PipelineSettingsSectionBody({
   }
   if (section === "variables") {
     return (
-      <div className="space-y-3">
+      <FieldGroup className="gap-3">
         <p className="text-xs text-muted-foreground">
           Pipeline variables available to assets via{" "}
           <span className="font-mono">{"{{ var.name }}"}</span>.
         </p>
         {draft.variables.map((variable, index) => (
-          <div key={index} className="space-y-2 rounded-md border p-3">
-            <div className="flex items-end gap-2">
-              <SettingsTextField
-                className="flex-1"
-                label="Name"
-                value={variable.name}
-                onChange={(value) =>
-                  update(
-                    "variables",
-                    replaceAt(draft.variables, index, { ...variable, name: value }),
-                  )
-                }
-                placeholder="lookback_days"
-              />
-              <SettingsTextField
-                className="w-28"
-                label="Type"
-                value={variable.type}
-                onChange={(value) =>
-                  update(
-                    "variables",
-                    replaceAt(draft.variables, index, { ...variable, type: value }),
-                  )
-                }
-                placeholder="integer"
-              />
+          <div
+            key={index}
+            data-pipeline-variable={variable.name}
+            className={cn(
+              "grid gap-3 rounded-md border p-3 transition-colors",
+              highlightedVariable === variable.name &&
+                "border-primary bg-primary/5 ring-2 ring-primary/20",
+            )}
+          >
+            <div className="flex items-start gap-2">
+              <div className="grid min-w-0 flex-1 grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_9rem]">
+                <SettingsTextField
+                  label="Name"
+                  value={variable.name}
+                  onChange={(value) =>
+                    update(
+                      "variables",
+                      replaceAt(draft.variables, index, { ...variable, name: value }),
+                    )
+                  }
+                  placeholder="lookback_days"
+                />
+                <VariableTypeField
+                  label="Type"
+                  value={variable.type}
+                  onChange={(value) => {
+                    const next = variableWithType(variable, value);
+                    update("variables", replaceAt(draft.variables, index, next));
+                  }}
+                />
+              </div>
               <Button
                 variant="ghost"
                 size="icon-sm"
+                className="mt-6"
                 aria-label="Remove variable"
                 onClick={() => update("variables", removeAt(draft.variables, index))}
               >
                 <Trash2 className="size-3.5" />
               </Button>
             </div>
-            <SettingsTextField
-              label="Default"
-              value={variableValueToText(variable.default_value)}
-              onChange={(value) =>
+            <VariableDefaultField
+              variable={variable}
+              onChange={(defaultValue) =>
                 update(
                   "variables",
-                  replaceAt(draft.variables, index, { ...variable, default_value: value }),
+                  replaceAt(draft.variables, index, {
+                    ...variable,
+                    default_value: defaultValue,
+                  }),
                 )
               }
-              placeholder="30"
             />
             <SettingsTextField
               label="Description"
@@ -655,7 +734,7 @@ function PipelineSettingsSectionBody({
           <Plus className="size-3.5" />
           Add variable
         </Button>
-      </div>
+      </FieldGroup>
     );
   }
   return null;
@@ -699,16 +778,22 @@ function SettingsTextField({
   hint?: string;
   className?: string;
 }) {
+  const id = useId();
   return (
-    <label className={cn("block space-y-1.5", className)}>
-      {label ? <span className="text-xs font-medium text-muted-foreground">{label}</span> : null}
+    <Field className={cn("gap-1.5", className)}>
+      {label ? (
+        <FieldLabel htmlFor={id} className="text-xs text-muted-foreground">
+          {label}
+        </FieldLabel>
+      ) : null}
       <Input
+        id={id}
         value={value}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
       />
-      {hint ? <span className="block text-[11px] text-muted-foreground">{hint}</span> : null}
-    </label>
+      {hint ? <FieldDescription className="text-[11px]">{hint}</FieldDescription> : null}
+    </Field>
   );
 }
 
@@ -723,12 +808,255 @@ function SettingsMultiValueField({
   onChange: (value: string[]) => void;
   placeholder?: string;
 }) {
+  const id = useId();
   return (
-    <label className="block space-y-1.5">
-      <span className="text-xs font-medium text-muted-foreground">{label}</span>
-      <MultiValueInput value={value} onChange={onChange} placeholder={placeholder} />
-    </label>
+    <Field className="gap-1.5">
+      <FieldLabel htmlFor={id} className="text-xs text-muted-foreground">
+        {label}
+      </FieldLabel>
+      <MultiValueInput id={id} value={value} onChange={onChange} placeholder={placeholder} />
+    </Field>
   );
+}
+
+const variableTypes = ["string", "integer", "number", "boolean", "array", "object"] as const;
+
+function VariableTypeField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const id = useId();
+  return (
+    <Field className="gap-1.5">
+      <FieldLabel htmlFor={id} className="text-xs text-muted-foreground">
+        {label}
+      </FieldLabel>
+      <Select value={value || "string"} onValueChange={onChange}>
+        <SelectTrigger id={id} className="w-full">
+          <SelectValue placeholder="Select a type" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            {variableTypes.map((type) => (
+              <SelectItem key={type} value={type}>
+                {type}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+    </Field>
+  );
+}
+
+function VariableDefaultField({
+  variable,
+  onChange,
+}: {
+  variable: PipelineConfigVariable;
+  onChange: (value: unknown) => void;
+}) {
+  const id = useId();
+  const type = variable.type || "string";
+  if (type === "boolean") {
+    return (
+      <Field className="gap-1.5">
+        <FieldLabel htmlFor={id} className="text-xs text-muted-foreground">
+          Default
+        </FieldLabel>
+        <Select
+          value={variable.default_value === true ? "true" : "false"}
+          onValueChange={(value) => onChange(value === "true")}
+        >
+          <SelectTrigger id={id} className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="true">true</SelectItem>
+              <SelectItem value="false">false</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </Field>
+    );
+  }
+  if (type === "integer" || type === "number") {
+    return (
+      <Field className="gap-1.5">
+        <FieldLabel htmlFor={id} className="text-xs text-muted-foreground">
+          Default
+        </FieldLabel>
+        <Input
+          id={id}
+          type="number"
+          step={type === "integer" ? 1 : "any"}
+          value={
+            typeof variable.default_value === "number" || typeof variable.default_value === "string"
+              ? variable.default_value
+              : ""
+          }
+          onChange={(event) => {
+            const raw = event.target.value;
+            if (raw === "") {
+              onChange(null);
+              return;
+            }
+            const value = Number(raw);
+            onChange(type === "integer" ? Math.trunc(value) : value);
+          }}
+        />
+        <FieldDescription className="text-[11px]">
+          Stored as a {type === "integer" ? "whole number" : "number"}, not text.
+        </FieldDescription>
+      </Field>
+    );
+  }
+  if (type === "array") {
+    return (
+      <Field className="gap-1.5">
+        <FieldLabel htmlFor={id} className="text-xs text-muted-foreground">
+          Default items
+        </FieldLabel>
+        <MultiValueInput
+          id={id}
+          value={
+            Array.isArray(variable.default_value)
+              ? variable.default_value.map(variableValueToText)
+              : []
+          }
+          onChange={onChange}
+          placeholder="Add item"
+        />
+        <FieldDescription className="text-[11px]">
+          Add each string item separately; commas remain part of an item.
+        </FieldDescription>
+      </Field>
+    );
+  }
+  if (type === "object") {
+    return <JSONVariableDefaultField value={variable.default_value} onChange={onChange} />;
+  }
+  return (
+    <Field className="gap-1.5">
+      <FieldLabel htmlFor={id} className="text-xs text-muted-foreground">
+        Default
+      </FieldLabel>
+      <Input
+        id={id}
+        value={variableValueToText(variable.default_value)}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="Value used when no override is supplied"
+      />
+    </Field>
+  );
+}
+
+function JSONVariableDefaultField({
+  value,
+  onChange,
+}: {
+  value: unknown;
+  onChange: (value: unknown) => void;
+}) {
+  const id = useId();
+  const serialized = JSON.stringify(
+    value && typeof value === "object" && !Array.isArray(value) ? value : {},
+    null,
+    2,
+  );
+  const [draft, setDraft] = useState(serialized);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    setDraft(serialized);
+    setError("");
+  }, [serialized]);
+
+  return (
+    <Field className="gap-1.5" data-invalid={error ? true : undefined}>
+      <FieldLabel htmlFor={id} className="text-xs text-muted-foreground">
+        Default object
+      </FieldLabel>
+      <Textarea
+        id={id}
+        value={draft}
+        aria-invalid={error ? true : undefined}
+        className="min-h-24 font-mono text-xs"
+        onChange={(event) => {
+          const next = event.target.value;
+          setDraft(next);
+          try {
+            const parsed = JSON.parse(next);
+            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+              setError('Enter a JSON object, for example {"region": "eu"}.');
+              return;
+            }
+            setError("");
+            onChange(parsed);
+          } catch {
+            setError("Enter valid JSON.");
+          }
+        }}
+      />
+      <FieldDescription className={cn("text-[11px]", error && "text-destructive")}>
+        {error || "Stored as a JSON object."}
+      </FieldDescription>
+    </Field>
+  );
+}
+
+function variableWithType(variable: PipelineConfigVariable, type: string): PipelineConfigVariable {
+  let defaultValue: unknown;
+  switch (type) {
+    case "integer": {
+      const numeric = Number(variable.default_value);
+      defaultValue = Number.isFinite(numeric) ? Math.trunc(numeric) : 0;
+      break;
+    }
+    case "number": {
+      const numeric = Number(variable.default_value);
+      defaultValue = Number.isFinite(numeric) ? numeric : 0;
+      break;
+    }
+    case "boolean":
+      defaultValue =
+        typeof variable.default_value === "boolean"
+          ? variable.default_value
+          : String(variable.default_value).toLowerCase() === "true";
+      break;
+    case "array":
+      defaultValue = Array.isArray(variable.default_value) ? variable.default_value : [];
+      break;
+    case "object":
+      defaultValue =
+        variable.default_value &&
+        typeof variable.default_value === "object" &&
+        !Array.isArray(variable.default_value)
+          ? variable.default_value
+          : {};
+      break;
+    default:
+      defaultValue = variableValueToText(variable.default_value);
+  }
+
+  const extra = { ...(variable.extra ?? {}) };
+  if (type === "array" && !extra.items) {
+    extra.items = { type: "string" };
+  } else if (type !== "array") {
+    delete extra.items;
+  }
+  return {
+    ...variable,
+    type,
+    default_value: defaultValue,
+    extra: Object.keys(extra).length > 0 ? extra : undefined,
+  };
 }
 
 function SettingsNumberField({

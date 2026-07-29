@@ -75,11 +75,13 @@ export function SemanticParametersEditor({
   pipelineId,
   onCheck,
   onGoToAsset,
+  onGoToJinjaVariable,
 }: {
   asset: WebAsset;
   pipelineId: string;
   onCheck?: () => void;
   onGoToAsset?: (pipelineId: string, assetId: string) => void;
+  onGoToJinjaVariable?: (variableName: string) => void;
 }) {
   const workspace = useAtomValue(workspaceAtom);
   const isSeed = isSeedAssetType(asset.type);
@@ -206,6 +208,7 @@ export function SemanticParametersEditor({
           onSave={saveQuery}
           onCheck={onCheck}
           onGoToAsset={onGoToAsset}
+          onGoToJinjaVariable={onGoToJinjaVariable}
         />
         <div
           className="font-monaco shrink-0 border-t px-3 py-2 text-[13px] leading-6"

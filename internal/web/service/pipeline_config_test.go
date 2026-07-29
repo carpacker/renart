@@ -73,3 +73,40 @@ parameters:
 		{Platform: "duckdb", Name: "duckdb-default"},
 	}, inferPipelineDefaultConnections(parsed))
 }
+
+func TestReferencedPipelineConnectionsIncludesResolvedAndMultiConnectionAssets(t *testing.T) {
+	t.Parallel()
+
+	parsed := &pipeline.Pipeline{
+		DefaultConnections: pipeline.EmptyStringMap{"duckdb": "warehouse"},
+		Assets: []*pipeline.Asset{
+			{Name: "analytics.orders", Type: pipeline.AssetTypeDuckDBQuery},
+			{
+				Name: "analytics.import",
+				Type: pipeline.AssetTypeIngestr,
+				Parameters: pipeline.ParameterMap{
+					"source_connection":      "source-postgres",
+					"destination":            "duckdb",
+					"destination_connection": "warehouse",
+				},
+			},
+			{
+				Name: "analytics.api",
+				Type: pipeline.AssetType(apiAssetType),
+				ExecutableFile: pipeline.ExecutableFile{Content: `type: api
+parameters:
+  request:
+    url: https://example.com/data
+  load:
+    target: api-target
+`},
+			},
+		},
+	}
+
+	assert.Equal(t, []webmodel.PipelineReferencedConnection{
+		{Name: "api-target", Assets: []string{"analytics.api"}},
+		{Name: "source-postgres", Assets: []string{"analytics.import"}},
+		{Name: "warehouse", Assets: []string{"analytics.import", "analytics.orders"}},
+	}, referencedPipelineConnections(parsed))
+}

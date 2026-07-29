@@ -19,6 +19,7 @@ import { WebAsset } from "@/lib/types";
 // getter for the model they run on. Registering per editor (as before) meant N
 // mounted cell editors produced N duplicated Jinja suggestions.
 const jinjaRenderGetters = new Map<string, () => JinjaRenderResponse | null>();
+const jinjaVariableDefinitionHandlers = new Map<string, (variableName: string) => void>();
 const jinjaProviderRegistry = new Map<
   typeof MonacoNS,
   { disposable: MonacoNS.IDisposable; refs: number }
@@ -31,6 +32,8 @@ function acquireJinjaProviders(monaco: typeof MonacoNS): () => void {
       disposable: registerJinjaProviders(
         monaco,
         (model) => jinjaRenderGetters.get(model.uri.toString())?.() ?? null,
+        (model, variableName) =>
+          jinjaVariableDefinitionHandlers.get(model.uri.toString())?.(variableName),
       ),
       refs: 0,
     };
@@ -55,11 +58,14 @@ export function useJinjaIntellisense(
   editor: MonacoNS.editor.IStandaloneCodeEditor | null,
   asset: WebAsset | null,
   content: string,
+  onGoToVariable?: (variableName: string) => void,
 ) {
   const [renderResult, setRenderResult] = useState<JinjaRenderResponse | null>(null);
   const selectedExecutionTimeWindow = useAtomValue(selectedExecutionTimeWindowAtom);
   const renderResultRef = useRef<JinjaRenderResponse | null>(null);
+  const goToVariableRef = useRef(onGoToVariable);
   renderResultRef.current = renderResult;
+  goToVariableRef.current = onGoToVariable;
   const assetId = asset?.id ?? null;
   const isSqlAsset =
     asset !== null &&
@@ -81,9 +87,13 @@ export function useJinjaIntellisense(
     if (!model) return;
     const uri = model.uri.toString();
     jinjaRenderGetters.set(uri, () => renderResultRef.current);
+    jinjaVariableDefinitionHandlers.set(uri, (variableName) =>
+      goToVariableRef.current?.(variableName),
+    );
     const release = acquireJinjaProviders(monaco);
     return () => {
       jinjaRenderGetters.delete(uri);
+      jinjaVariableDefinitionHandlers.delete(uri);
       release();
     };
   }, [monaco, editor]);

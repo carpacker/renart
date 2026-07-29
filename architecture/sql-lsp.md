@@ -60,6 +60,11 @@ HTTP/Monaco adapter                     stdio JSON-RPC adapter
   documents with `ErrRenameTemplated` — edits against rendered SQL cannot be
   mapped back safely — and both frontends surface the reason (LSP
   `RequestFailed`, Monaco `rejectReason`).
+  SQL symbol definitions continue through the LSP. Pipeline variables are the
+  deliberate exception: the shared Jinja Monaco provider uses the renderer's
+  variable metadata and a custom editor URI so the standard go-to-definition
+  gesture opens the guided pipeline Variables settings and highlights
+  `var.name`; an LSP file location would incorrectly bypass that UI target.
 
 ## 2. Web service: state → graph, caching
 

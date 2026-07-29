@@ -39,6 +39,7 @@ export function useAssetMonaco({
   editorValue,
   inspectDiagnosticSnapshot = null,
   onGoToAsset,
+  onGoToJinjaVariable,
   onInspect,
   onSave,
 }: {
@@ -46,6 +47,7 @@ export function useAssetMonaco({
   editorValue: string;
   inspectDiagnosticSnapshot?: InspectDiagnosticSnapshot | null;
   onGoToAsset?: (pipelineId: string, assetId: string) => void;
+  onGoToJinjaVariable?: (variableName: string) => void;
   onInspect?: () => void;
   onSave?: () => void | Promise<unknown>;
 }) {
@@ -83,7 +85,7 @@ export function useAssetMonaco({
   );
   useSQLLSP(monacoInstance, editorInstance, asset, editorValue, schemaTables, onGoToAsset);
   useSQLCanvasHover(monacoInstance, editorInstance, asset);
-  useJinjaIntellisense(monacoInstance, editorInstance, asset, editorValue);
+  useJinjaIntellisense(monacoInstance, editorInstance, asset, editorValue, onGoToJinjaVariable);
   usePythonIntellisense(monacoInstance, editorInstance, asset, editorValue);
   usePythonQueryIntellisense(
     monacoInstance,

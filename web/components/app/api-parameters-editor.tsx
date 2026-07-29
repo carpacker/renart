@@ -29,11 +29,13 @@ export function ApiParametersEditor({
   pipelineId,
   onInspect,
   onGoToAsset,
+  onGoToJinjaVariable,
 }: {
   asset: WebAsset;
   pipelineId: string;
   onInspect?: () => void;
   onGoToAsset?: (pipelineId: string, assetId: string) => void;
+  onGoToJinjaVariable?: (variableName: string) => void;
 }) {
   const { monacoTheme } = useWorkspaceTheme();
   const { awaitAllSaves, saveAssetNow } = useDebouncedAssetSave();
@@ -149,6 +151,7 @@ export function ApiParametersEditor({
       asset,
       editorValue: block,
       onGoToAsset,
+      onGoToJinjaVariable,
       onInspect,
       onSave: flushSave,
     });

@@ -255,6 +255,7 @@ type BuildContextValue = {
   deleteAssetById: (assetId: string) => Promise<void>;
   goToCatalog: (assetId?: string) => void;
   openPipelineConnections: () => void;
+  openPipelineVariable: (variableName: string) => void;
   openNewAsset: () => void;
   openNewAssetInGroup: (prefix?: string) => void;
   createDownstreamAsset: (source: { id: string; name: string }) => void;
@@ -599,11 +600,15 @@ export function AppBuildPage({
   const [pipelineSettingsSection, setPipelineSettingsSection] = useState<
     PipelineSettingsSection | undefined
   >(undefined);
-  const openPipelineSettings = (section?: PipelineSettingsSection) => {
+  const [pipelineSettingsVariable, setPipelineSettingsVariable] = useState<string | undefined>();
+  const openPipelineSettings = (section?: PipelineSettingsSection, variableName?: string) => {
     setExplorerOpen(false);
     setPipelineSettingsSection(section);
+    setPipelineSettingsVariable(variableName);
     setPipelineSettingsOpen(true);
   };
+  const openJinjaVariable = (variableName: string) =>
+    openPipelineSettings("variables", variableName);
   const [pipelinePlanOpen, setPipelinePlanOpen] = useState(false);
   const [deploymentPlanOpen, setDeploymentPlanOpen] = useState(false);
   const resultsPanelRef = useRef<PanelImperativeHandle | null>(null);
@@ -1170,6 +1175,7 @@ export function AppBuildPage({
     deleteAssetById,
     goToCatalog,
     openPipelineConnections: () => openPipelineSettings("connections"),
+    openPipelineVariable: openJinjaVariable,
     openNewAsset,
     openNewAssetInGroup,
     createDownstreamAsset,
@@ -1415,6 +1421,7 @@ export function AppBuildPage({
           onOpenChange={setPipelineSettingsOpen}
           pipelineId={pipelineId}
           initialSection={pipelineSettingsSection}
+          highlightedVariable={pipelineSettingsVariable}
         />
         <Dialog
           open={destructiveMaterializationPrompt !== null}
@@ -2237,6 +2244,7 @@ function EditorWorkspace({ asset, adhoc }: { asset: BuildAsset; adhoc: boolean }
     view,
     buildSearch,
     goToAsset,
+    openPipelineVariable,
     openInspector,
     materializeSelectedAsset,
     fullRefreshSelectedAsset,
@@ -2348,6 +2356,7 @@ function EditorWorkspace({ asset, adhoc }: { asset: BuildAsset; adhoc: boolean }
               pipelineId={asset.pipelineId}
               onInspect={inspectSelectedAsset}
               onGoToAsset={goToAsset}
+              onGoToJinjaVariable={openPipelineVariable}
             />
           ) : asset.workspaceAsset &&
             asset.pipelineId &&
@@ -2359,6 +2368,7 @@ function EditorWorkspace({ asset, adhoc }: { asset: BuildAsset; adhoc: boolean }
               pipelineId={asset.pipelineId}
               onCheck={materializeSelectedAsset}
               onGoToAsset={goToAsset}
+              onGoToJinjaVariable={openPipelineVariable}
             />
           ) : asset.workspaceAsset && asset.pipelineId ? (
             <AppAssetEditor
@@ -2366,6 +2376,7 @@ function EditorWorkspace({ asset, adhoc }: { asset: BuildAsset; adhoc: boolean }
               pipelineId={asset.pipelineId}
               onInspect={inspectSelectedAsset}
               onGoToAsset={goToAsset}
+              onGoToJinjaVariable={openPipelineVariable}
             />
           ) : (
             <ResultsEmpty label="The asset source is unavailable." />

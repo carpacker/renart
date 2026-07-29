@@ -146,6 +146,7 @@ export function jinjaSpanAtPosition(
 export function registerJinjaProviders(
   monaco: Monaco,
   getRenderResult: (model: MonacoNS.editor.ITextModel) => JinjaRenderResponse | null,
+  onGoToVariable?: (model: MonacoNS.editor.ITextModel, variableName: string) => void,
 ): MonacoNS.IDisposable {
   const disposables: MonacoNS.IDisposable[] = [];
 
@@ -231,9 +232,76 @@ export function registerJinjaProviders(
         },
       }),
     );
+
+    disposables.push(
+      monaco.languages.registerDefinitionProvider(language, {
+        provideDefinition(model, position) {
+          const reference = jinjaVariableReferenceAtPosition(model, position);
+          if (
+            !reference ||
+            !getRenderResult(model)?.variables.some(
+              (variable) => variable.name === reference.variableName,
+            )
+          ) {
+            return null;
+          }
+          return {
+            uri: monaco.Uri.from({
+              scheme: "renart-settings",
+              authority: "pipeline-variable",
+              path: `/${encodeURIComponent(reference.variableName)}`,
+            }),
+            range: new monaco.Range(1, 1, 1, 1),
+          };
+        },
+      }),
+    );
   }
 
+  disposables.push(
+    monaco.editor.registerEditorOpener({
+      openCodeEditor(source, resource) {
+        if (resource.scheme !== "renart-settings" || resource.authority !== "pipeline-variable") {
+          return false;
+        }
+        const model = source.getModel();
+        if (!model) {
+          return false;
+        }
+        onGoToVariable?.(model, decodeURIComponent(resource.path.replace(/^\/+/, "")));
+        return true;
+      },
+    }),
+  );
+
   return { dispose: () => disposables.forEach((disposable) => disposable.dispose()) };
+}
+
+function jinjaVariableReferenceAtPosition(
+  model: MonacoNS.editor.ITextModel,
+  position: MonacoNS.Position,
+) {
+  if (!jinjaSpanAtPosition(model, position)) {
+    return null;
+  }
+  const text = model.getValue();
+  const offset = model.getOffsetAt(position);
+  const pattern = /\bvar\.([A-Za-z_][A-Za-z0-9_]*)\b/g;
+  for (const match of text.matchAll(pattern)) {
+    const startOffset = match.index;
+    const endOffset = startOffset + match[0].length;
+    if (offset < startOffset || offset > endOffset) {
+      continue;
+    }
+    return {
+      variableName: match[1],
+      range: {
+        start: model.getPositionAt(startOffset),
+        end: model.getPositionAt(endOffset),
+      },
+    };
+  }
+  return null;
 }
 
 function builtinVariableSuggestions(

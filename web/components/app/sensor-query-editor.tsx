@@ -16,12 +16,14 @@ export function SensorQueryEditor({
   onSave,
   onCheck,
   onGoToAsset,
+  onGoToJinjaVariable,
 }: {
   asset: WebAsset;
   query: string;
   onSave: (query: string) => Promise<void>;
   onCheck?: () => void;
   onGoToAsset?: (pipelineId: string, assetId: string) => void;
+  onGoToJinjaVariable?: (variableName: string) => void;
 }) {
   const { monacoTheme } = useWorkspaceTheme();
   const [query, setQuery] = useState(externalQuery);
@@ -144,6 +146,7 @@ export function SensorQueryEditor({
       asset,
       editorValue: query,
       onGoToAsset,
+      onGoToJinjaVariable,
       onInspect: handleCheck,
       onSave: handleEditorSave,
     });

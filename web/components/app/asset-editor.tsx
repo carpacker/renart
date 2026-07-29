@@ -25,11 +25,13 @@ export function AppAssetEditor({
   pipelineId,
   onInspect,
   onGoToAsset,
+  onGoToJinjaVariable,
 }: {
   asset: WebAsset;
   pipelineId: string;
   onInspect?: () => void;
   onGoToAsset?: (pipelineId: string, assetId: string) => void;
+  onGoToJinjaVariable?: (variableName: string) => void;
 }) {
   const { monacoTheme } = useWorkspaceTheme();
   const { editorDisplayValue, editorValue, handleEditorChange, handleSaveSelectedAsset } =
@@ -39,6 +41,7 @@ export function AppAssetEditor({
       asset,
       editorValue,
       onGoToAsset,
+      onGoToJinjaVariable,
       onInspect,
       onSave: handleSaveSelectedAsset,
     });

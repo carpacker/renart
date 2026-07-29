@@ -1082,6 +1082,11 @@ export type PipelineConfigConnection = {
   name: string;
 };
 
+export type PipelineReferencedConnection = {
+  name: string;
+  assets: string[];
+};
+
 export type PipelineConfigNotification = {
   enabled: boolean;
   channel?: string;
@@ -1116,6 +1121,7 @@ export type WebPipelineConfigResponse = {
   domains: string[];
   default_connections: PipelineConfigConnection[];
   inferred_default_connections: PipelineConfigConnection[];
+  referenced_connections: PipelineReferencedConnection[];
   catchup: boolean;
   metadata_push_bigquery: boolean;
   retries: number;

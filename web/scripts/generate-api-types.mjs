@@ -203,6 +203,7 @@ const sources = [
       "InferColumnsResult",
       "OperationMetadata",
       "PipelineConfigConnection",
+      "PipelineReferencedConnection",
       "PipelineConfigNotification",
       "PipelineConfigDefaults",
       "PipelineConfigVariable",

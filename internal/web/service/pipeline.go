@@ -202,7 +202,7 @@ func (s *PipelineService) GetConfig(ctx context.Context, pipelineID string) (*we
 	}
 
 	resp := buildPipelineConfigResponse(pipelineID, filepath.ToSlash(relPath), parsed)
-	resp.InferredDefaultConnections = s.inferredDefaultConnections(ctx, relPath)
+	resp.InferredDefaultConnections, resp.ReferencedConnections = s.pipelineConnectionSummaries(ctx, relPath)
 	resp.Status = "ok"
 	return resp, nil
 }
@@ -340,7 +340,7 @@ func (s *PipelineService) UpdateConfig(ctx context.Context, pipelineID string, r
 	}
 
 	resp := buildPipelineConfigResponse(pipelineID, filepath.ToSlash(relPath), updated)
-	resp.InferredDefaultConnections = s.inferredDefaultConnections(ctx, relPath)
+	resp.InferredDefaultConnections, resp.ReferencedConnections = s.pipelineConnectionSummaries(ctx, relPath)
 	resp.Status = "ok"
 	return filepath.ToSlash(relPath), resp, nil
 }
@@ -588,21 +588,24 @@ func buildDefaultConnections(input []webmodel.PipelineConfigConnection) pipeline
 	return result
 }
 
-// inferredDefaultConnections loads assets only for the settings response. The
+// pipelineConnectionSummaries loads assets only for the settings response. The
 // normal pipeline config path deliberately parses pipeline.yml alone so
 // schedule/config edits remain available even when an asset is temporarily
-// invalid. Inference is supplementary: a failed full parse simply leaves the
-// read-only inferred list empty.
-func (s *PipelineService) inferredDefaultConnections(ctx context.Context, relPath string) []webmodel.PipelineConfigConnection {
+// invalid. These summaries are supplementary: a failed full parse simply
+// leaves both read-only lists empty.
+func (s *PipelineService) pipelineConnectionSummaries(
+	ctx context.Context,
+	relPath string,
+) ([]webmodel.PipelineConfigConnection, []webmodel.PipelineReferencedConnection) {
 	absPath, err := SafeJoin(s.workspaceRoot, relPath)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	parsed, err := s.newPipelineBuilder().CreatePipelineFromPath(ctx, absPath, pipeline.WithMutate())
 	if err != nil {
-		return nil
+		return nil, nil
 	}
-	return inferPipelineDefaultConnections(parsed)
+	return inferPipelineDefaultConnections(parsed), referencedPipelineConnections(parsed)
 }
 
 func inferPipelineDefaultConnections(parsed *pipeline.Pipeline) []webmodel.PipelineConfigConnection {
@@ -656,6 +659,68 @@ func inferPipelineDefaultConnections(parsed *pipeline.Pipeline) []webmodel.Pipel
 		}
 		return result[i].Platform < result[j].Platform
 	})
+	return result
+}
+
+func referencedPipelineConnections(parsed *pipeline.Pipeline) []webmodel.PipelineReferencedConnection {
+	if parsed == nil {
+		return nil
+	}
+
+	assetsByConnection := make(map[string]map[string]struct{})
+	add := func(connectionName, assetName string) {
+		connectionName = strings.TrimSpace(connectionName)
+		assetName = strings.TrimSpace(assetName)
+		if connectionName == "" || assetName == "" || connectionName == "local" {
+			return
+		}
+		if assetsByConnection[connectionName] == nil {
+			assetsByConnection[connectionName] = make(map[string]struct{})
+		}
+		assetsByConnection[connectionName][assetName] = struct{}{}
+	}
+
+	for _, asset := range parsed.Assets {
+		if asset == nil {
+			continue
+		}
+		if names, err := parsed.GetAllConnectionNamesForAsset(asset); err == nil {
+			for _, name := range names {
+				add(name, asset.Name)
+			}
+		}
+
+		// Renart-owned API and Load assets are not fully represented by Bruin's
+		// generic connection resolver. Include their canonical target and Load
+		// source so this list matches the execution path.
+		if isAPIAsset(asset) || isLoadAsset(asset) {
+			if target, err := targetConnectionNameForAsset(asset, parsed); err == nil {
+				add(target, asset.Name)
+			}
+		}
+		if isLoadAsset(asset) {
+			add(loadParamsFromAsset(asset).SourceConnection, asset.Name)
+		}
+	}
+
+	connectionNames := make([]string, 0, len(assetsByConnection))
+	for name := range assetsByConnection {
+		connectionNames = append(connectionNames, name)
+	}
+	sort.Strings(connectionNames)
+
+	result := make([]webmodel.PipelineReferencedConnection, 0, len(connectionNames))
+	for _, name := range connectionNames {
+		assetNames := make([]string, 0, len(assetsByConnection[name]))
+		for assetName := range assetsByConnection[name] {
+			assetNames = append(assetNames, assetName)
+		}
+		sort.Strings(assetNames)
+		result = append(result, webmodel.PipelineReferencedConnection{
+			Name:   name,
+			Assets: assetNames,
+		})
+	}
 	return result
 }
 

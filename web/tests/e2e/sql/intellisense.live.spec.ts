@@ -799,6 +799,22 @@ test.describe("sql intellisense live", () => {
     await replaceEditorContentAndWaitForJinja(page, "select '{{ var. }}'");
     await setEditorPositionAfterText(page, "var.");
     await openSuggestUntilText(page, "run_mode");
+
+    await replaceEditorContentAndWaitForJinja(page, "select '{{ var.run_mode }}'");
+    await setEditorPositionAfterText(page, "var.run_mode");
+    await page.keyboard.press("F12");
+
+    const settings = page.getByRole("dialog", { name: /Pipeline settings/ });
+    await expect(settings).toBeVisible({ timeout: 10000 });
+    await expect(settings.getByRole("tab", { name: "Variables" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    const variable = settings.locator('[data-pipeline-variable="run_mode"]');
+    await expect(variable).toBeVisible();
+    await expect(variable).toHaveClass(/ring-2/);
+    await expect(variable.getByRole("combobox", { name: "Type" })).toContainText("string");
+    await expect(variable.getByRole("textbox", { name: "Default" })).toHaveValue("incremental");
   });
 
   test("keeps SQL suggestion focus across workspace SSE updates", async ({ liveApp, page }) => {
