@@ -355,19 +355,26 @@ not underscore-flattened route hacks.
   **Overlapping pipeline runs** (`concurrency`) from **Maximum active steps**
   (`max_active_steps`). A blank step value explains the sequential default;
   values above one opt safe independent assets into bounded overlap.
-  Connections show both editable platform defaults and a read-only,
-  asset-grouped inventory of every effective source/target connection resolved
-  by the backend. Variables use JSON-schema type choices and type-aware default
-  controls (numeric, boolean, string-list, or JSON object) so saved defaults
-  retain their value types. Go to definition on `var.name` opens this Variables
-  section, scrolls to the matching definition, and highlights it.
+  Connections select platform and connection defaults from the configured
+  pairs in the active environment, prevent duplicate platform rows, and show
+  unavailable legacy values until the user explicitly corrects them. The same
+  section includes a read-only, asset-grouped inventory of every effective
+  source/target connection resolved by the backend. Variables use JSON-schema
+  type choices and type-aware default controls (numeric, boolean, string-list,
+  or JSON object) so saved defaults retain their value types. Resolved
+  `var.name` references use Monaco's native Ctrl/Cmd-hover link affordance; go
+  to definition opens this Variables section, scrolls to the matching
+  definition, and highlights it.
   Run details use semantic event badges, link current-workspace asset events
   back to the split Build view, and render timeline asset names in a dedicated
   column with full-name tooltips. Timeline rows contract from 28px to 12px as
   the run grows so as many as 19 assets remain visible without an inner
   scrollbar; 20 or more use a fixed 16px row and an independent ScrollArea.
   Hovering an asset timeline row or one of its event rows highlights the
-  matching rows in both views.
+  matching rows in both views. A running timeline follows newly appended rows
+  to the bottom. Clicking either an event or a timeline row selects the asset
+  and scrolls the counterpart view to its matching row; timeline clicks also
+  return the lower panel to its Events tab.
   Queue-backed active runs expose a destructive, confirmed Abort run action.
   A running cancellation shows `Stopping` from River's durable request state
   until the terminal SSE event replaces it; queued cancellation becomes

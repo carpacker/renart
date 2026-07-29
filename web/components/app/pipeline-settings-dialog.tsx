@@ -45,11 +45,14 @@ import {
   updatePipelineConfig,
   updatePipelinePythonDependencies,
 } from "@/lib/api-pipelines";
+import { getWorkspaceConfig } from "@/lib/api-config";
 import { selectedEnvironmentAtom } from "@/lib/atoms/domains/workspace";
 import type {
   PipelineConfigConnection,
   PipelineConfigVariable,
   UpdatePipelineConfigRequest,
+  WorkspaceConfigConnection,
+  WorkspaceConfigEnvironment,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -93,6 +96,9 @@ export function PipelineSettingsDialog({
     PipelineConfigConnection[]
   >([]);
   const [referencedConnections, setReferencedConnections] = useState<ReferencedConnection[]>([]);
+  const [workspaceEnvironments, setWorkspaceEnvironments] = useState<WorkspaceConfigEnvironment[]>(
+    [],
+  );
   const [pythonDependencies, setPythonDependencies] = useState<string[]>([]);
   const [initialPythonDependencies, setInitialPythonDependencies] = useState<string[]>([]);
   const [pythonDependencyPath, setPythonDependencyPath] = useState("");
@@ -107,12 +113,17 @@ export function PipelineSettingsDialog({
     setDraft(null);
     setInferredDefaultConnections([]);
     setReferencedConnections([]);
+    setWorkspaceEnvironments([]);
     setPythonDependencies([]);
     setInitialPythonDependencies([]);
     setPythonDependencyPath("");
     let cancelled = false;
-    Promise.allSettled([getPipelineConfig(pipelineId), getPipelinePythonDependencies(pipelineId)])
-      .then(([configResult, pythonResult]) => {
+    Promise.allSettled([
+      getPipelineConfig(pipelineId),
+      getPipelinePythonDependencies(pipelineId),
+      getWorkspaceConfig(),
+    ])
+      .then(([configResult, pythonResult, workspaceResult]) => {
         if (cancelled) return;
         const messages: string[] = [];
         if (configResult.status === "fulfilled") {
@@ -130,6 +141,13 @@ export function PipelineSettingsDialog({
           setPythonDependencyPath(python.path);
         } else {
           messages.push(errorMessage(pythonResult.reason, "Failed to load Python dependencies."));
+        }
+        if (workspaceResult.status === "fulfilled") {
+          setWorkspaceEnvironments(workspaceResult.value.environments ?? []);
+        } else {
+          messages.push(
+            errorMessage(workspaceResult.reason, "Failed to load available connections."),
+          );
         }
         setError(messages.length > 0 ? messages.join(" ") : null);
       })
@@ -256,6 +274,7 @@ export function PipelineSettingsDialog({
                       update={update}
                       inferredDefaultConnections={inferredDefaultConnections}
                       referencedConnections={referencedConnections}
+                      workspaceEnvironments={workspaceEnvironments}
                       highlightedVariable={highlightedVariable}
                       pythonDependencies={pythonDependencies}
                       onPythonDependenciesChange={setPythonDependencies}
@@ -346,6 +365,7 @@ function PipelineSettingsSectionBody({
   update,
   inferredDefaultConnections,
   referencedConnections,
+  workspaceEnvironments,
   highlightedVariable,
   pythonDependencies,
   onPythonDependenciesChange,
@@ -356,12 +376,17 @@ function PipelineSettingsSectionBody({
   update: <K extends keyof PipelineConfigDraft>(key: K, value: PipelineConfigDraft[K]) => void;
   inferredDefaultConnections: PipelineConfigConnection[];
   referencedConnections: ReferencedConnection[];
+  workspaceEnvironments: WorkspaceConfigEnvironment[];
   highlightedVariable?: string;
   pythonDependencies: string[];
   onPythonDependenciesChange: (value: string[]) => void;
   pythonDependencyPath: string;
 }) {
   const environment = useAtomValue(selectedEnvironmentAtom);
+  const environmentConnections =
+    workspaceEnvironments.find((item) => item.name === environment)?.connections ??
+    workspaceEnvironments[0]?.connections ??
+    [];
   if (section === "general") {
     return (
       <>
@@ -490,30 +515,46 @@ function PipelineSettingsSectionBody({
           </p>
         ) : (
           draft.default_connections.map((connection, index) => (
-            <div key={index} className="flex items-end gap-2">
-              <SettingsTextField
-                className="flex-1"
-                label={index === 0 ? "Platform" : undefined}
+            <div
+              key={index}
+              className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] items-end gap-2"
+            >
+              <PipelineConnectionSelect
+                label="Platform"
+                hideLabel={index > 0}
                 value={connection.platform}
-                onChange={(value) =>
+                options={pipelinePlatformOptions(
+                  environmentConnections,
+                  draft.default_connections,
+                  index,
+                )}
+                onChange={(value) => {
+                  const firstConnection = connectionNamesForPlatform(
+                    environmentConnections,
+                    value,
+                  )[0];
                   update(
                     "default_connections",
-                    replaceAt(draft.default_connections, index, { ...connection, platform: value }),
-                  )
-                }
-                placeholder="gcp"
+                    replaceAt(draft.default_connections, index, {
+                      platform: value,
+                      name: firstConnection ?? "",
+                    }),
+                  );
+                }}
+                placeholder="Choose platform"
               />
-              <SettingsTextField
-                className="flex-1"
-                label={index === 0 ? "Connection" : undefined}
+              <PipelineConnectionSelect
+                label="Connection"
+                hideLabel={index > 0}
                 value={connection.name}
+                options={connectionNamesForPlatform(environmentConnections, connection.platform)}
                 onChange={(value) =>
                   update(
                     "default_connections",
                     replaceAt(draft.default_connections, index, { ...connection, name: value }),
                   )
                 }
-                placeholder="bq-prod"
+                placeholder="Choose connection"
               />
               <PipelineConnectionSettingsLink
                 environment={environment}
@@ -535,16 +576,35 @@ function PipelineSettingsSectionBody({
         <Button
           variant="outline"
           size="sm"
-          onClick={() =>
+          disabled={
+            pipelinePlatformOptions(
+              environmentConnections,
+              draft.default_connections,
+              draft.default_connections.length,
+            ).length === 0
+          }
+          onClick={() => {
+            const platform = pipelinePlatformOptions(
+              environmentConnections,
+              draft.default_connections,
+              draft.default_connections.length,
+            )[0];
+            const connection = connectionNamesForPlatform(environmentConnections, platform)[0];
+            if (!platform || !connection) return;
             update("default_connections", [
               ...draft.default_connections,
-              { platform: "", name: "" },
-            ])
-          }
+              { platform, name: connection },
+            ]);
+          }}
         >
           <Plus className="size-3.5" />
           Add connection
         </Button>
+        {environmentConnections.length === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            Add a project connection for this environment before creating a pipeline override.
+          </p>
+        ) : null}
         {referencedConnections.length > 0 ? (
           <div className="grid gap-2 border-t pt-3">
             <div>
@@ -795,6 +855,91 @@ function SettingsTextField({
       {hint ? <FieldDescription className="text-[11px]">{hint}</FieldDescription> : null}
     </Field>
   );
+}
+
+function PipelineConnectionSelect({
+  label,
+  hideLabel,
+  value,
+  options,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  hideLabel?: boolean;
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+  placeholder: string;
+}) {
+  const id = useId();
+  const unavailable = Boolean(value && !options.includes(value));
+  return (
+    <Field className="min-w-0 gap-1.5">
+      <FieldLabel
+        htmlFor={id}
+        className={cn("text-xs text-muted-foreground", hideLabel && "sr-only")}
+      >
+        {label}
+      </FieldLabel>
+      <Select value={value || undefined} onValueChange={onChange}>
+        <SelectTrigger id={id} className="w-full" aria-invalid={unavailable || undefined}>
+          <SelectValue placeholder={placeholder} />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            {unavailable ? (
+              <SelectItem value={value} disabled>
+                {value} (not available)
+              </SelectItem>
+            ) : null}
+            {options.map((option) => (
+              <SelectItem key={option} value={option}>
+                {option}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+      {unavailable ? (
+        <FieldDescription className="text-[11px] text-destructive">
+          Choose a configured {label.toLocaleLowerCase()}.
+        </FieldDescription>
+      ) : null}
+    </Field>
+  );
+}
+
+function connectionNamesForPlatform(connections: WorkspaceConfigConnection[], platform?: string) {
+  if (!platform) return [];
+  return Array.from(
+    new Set(
+      connections
+        .filter((connection) => connection.type === platform)
+        .map((connection) => connection.name.trim())
+        .filter(Boolean),
+    ),
+  ).sort((left, right) => left.localeCompare(right));
+}
+
+function pipelinePlatformOptions(
+  connections: WorkspaceConfigConnection[],
+  defaults: PipelineConfigConnection[],
+  currentIndex: number,
+) {
+  const used = new Set(
+    defaults
+      .filter((_, index) => index !== currentIndex)
+      .map((connection) => connection.platform.trim())
+      .filter(Boolean),
+  );
+  return Array.from(
+    new Set(
+      connections
+        .map((connection) => connection.type.trim())
+        .filter((platform) => platform && !used.has(platform)),
+    ),
+  ).sort((left, right) => left.localeCompare(right));
 }
 
 function SettingsMultiValueField({

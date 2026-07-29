@@ -240,6 +240,8 @@ func (h *PipelineHandlers) writePipelinePythonDependenciesError(w http.ResponseW
 func (h *PipelineHandlers) writePipelineConfigError(w http.ResponseWriter, err error) {
 	message := err.Error()
 	switch {
+	case errors.Is(err, service.ErrInvalidPipelineDefaultConnection):
+		webapi.WriteBadRequest(w, "pipeline_default_connection_invalid", message)
 	case strings.Contains(message, "illegal base64"):
 		webapi.WriteBadRequest(w, "invalid_pipeline_id", "invalid pipeline id")
 	case strings.Contains(message, "invalid path"):

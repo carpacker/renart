@@ -272,11 +272,39 @@ test.describe("app scheduler pages live", () => {
     await expect(page.getByTestId("run-timeline-track")).toHaveCount(20);
     const scroll = page.getByTestId("run-timeline-scroll");
     await expect(scroll).toBeVisible();
+    const timelineViewport = scroll.locator(':scope > [data-slot="scroll-area-viewport"]');
     expect(
-      await scroll
-        .locator(':scope > [data-slot="scroll-area-viewport"]')
-        .evaluate((viewport) => viewport.scrollHeight > viewport.clientHeight),
+      await timelineViewport.evaluate((viewport) => viewport.scrollHeight > viewport.clientHeight),
     ).toBe(true);
+    await expect
+      .poll(() =>
+        timelineViewport.evaluate(
+          (viewport) => viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 1,
+        ),
+      )
+      .toBe(true);
+
+    const eventsViewport = page
+      .locator('[data-slot="tabs-content"][data-state="active"]')
+      .locator('[data-slot="scroll-area-viewport"]');
+    const firstEventRow = page
+      .getByTestId("run-event-row")
+      .filter({ hasText: "analytics.asset_01" })
+      .first();
+    await firstEventRow.locator("td").last().click();
+    await expect
+      .poll(() => timelineViewport.evaluate((viewport) => viewport.scrollTop))
+      .toBeLessThan(24);
+
+    const firstEventScrollTop = await eventsViewport.evaluate((viewport) => viewport.scrollTop);
+    await page.getByRole("tab", { name: "Output" }).click();
+    await page
+      .locator('[data-testid="run-timeline-track"][data-asset="analytics.asset_20"]')
+      .click();
+    await expect(page.getByRole("tab", { name: "Events" })).toHaveAttribute("data-state", "active");
+    await expect
+      .poll(() => eventsViewport.evaluate((viewport) => viewport.scrollTop))
+      .toBeGreaterThan(firstEventScrollTop + 50);
   });
 
   test("renders follower ownership as read-only", async ({ liveApp, page }) => {

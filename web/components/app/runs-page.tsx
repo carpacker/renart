@@ -62,6 +62,12 @@ const runTabsTriggerClass = "flex-none";
 const runStatuses = ["all", "queued", "running", "success", "failed", "cancelled"] as const;
 const pageSize = 8;
 
+type RunScrollRequest = {
+  asset: string;
+  target: "events" | "timeline";
+  sequence: number;
+};
+
 export type AppRunsSearch = {
   q?: string;
   status?: (typeof runStatuses)[number];
@@ -293,7 +299,28 @@ export function AppRunDetailPage({
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [hoveredAsset, setHoveredAsset] = useState<string | null>(null);
-  useEffect(() => setHoveredAsset(null), [runId]);
+  const [selectedAsset, setSelectedAsset] = useState<string | null>(null);
+  const [runDetailTab, setRunDetailTab] = useState("events");
+  const [scrollRequest, setScrollRequest] = useState<RunScrollRequest | null>(null);
+  const scrollSequenceRef = useRef(0);
+  useEffect(() => {
+    setHoveredAsset(null);
+    setSelectedAsset(null);
+    setRunDetailTab("events");
+    setScrollRequest(null);
+  }, [runId]);
+  const highlightedAsset = hoveredAsset ?? selectedAsset;
+  const scrollToRunAsset = (asset: string, target: RunScrollRequest["target"]) => {
+    setSelectedAsset(asset);
+    if (target === "events") {
+      setRunDetailTab("events");
+    }
+    setScrollRequest({
+      asset,
+      target,
+      sequence: ++scrollSequenceRef.current,
+    });
+  };
   const output = useMemo(() => combineRunOutput(logs, run?.error), [logs, run?.error]);
   const assetIdsByName = useMemo(() => {
     const pipeline = workspace?.pipelines.find((candidate) => candidate.id === run?.pipeline_id);
@@ -576,12 +603,15 @@ export function AppRunDetailPage({
         <RunTimelinePanel
           run={run}
           steps={steps}
-          hoveredAsset={hoveredAsset}
+          highlightedAsset={highlightedAsset}
           onHoveredAssetChange={setHoveredAsset}
+          scrollRequest={scrollRequest}
+          onActivateAsset={(asset) => scrollToRunAsset(asset, "events")}
         />
         <AppPanel className="min-h-0 flex-1 overflow-hidden">
           <Tabs
-            defaultValue="events"
+            value={runDetailTab}
+            onValueChange={setRunDetailTab}
             className="flex h-full min-h-0 flex-col gap-0 overflow-hidden"
           >
             <div className="border-b px-2 py-1">
@@ -617,8 +647,10 @@ export function AppRunDetailPage({
                 steps={steps}
                 loading={loadingRunId === run.id}
                 assetIdsByName={assetIdsByName}
-                hoveredAsset={hoveredAsset}
+                highlightedAsset={highlightedAsset}
                 onHoveredAssetChange={setHoveredAsset}
+                scrollRequest={scrollRequest}
+                onActivateAsset={(asset) => scrollToRunAsset(asset, "timeline")}
               />
             </TabsContent>
             {plan ? (
@@ -963,21 +995,45 @@ function runPlanStageBadgeVariant(
 function RunTimelinePanel({
   run,
   steps,
-  hoveredAsset,
+  highlightedAsset,
   onHoveredAssetChange,
+  scrollRequest,
+  onActivateAsset,
 }: {
   run: PipelineRun;
   steps: PipelineRunStep[];
-  hoveredAsset: string | null;
+  highlightedAsset: string | null;
   onHoveredAssetChange: (asset: string | null) => void;
+  scrollRequest: RunScrollRequest | null;
+  onActivateAsset: (asset: string) => void;
 }) {
+  const timelineRef = useRef<HTMLDivElement | null>(null);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
   const now = useNow(run.status === "running");
   const bounds = timelineBounds(run, steps, now);
   const counts = countSteps(steps);
   const scrollable = steps.length >= 20;
   const rowHeight = timelineRowHeight(steps.length);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    viewport.scrollTop = viewport.scrollHeight;
+  }, [steps.length, scrollable]);
+
+  useEffect(() => {
+    if (scrollRequest?.target !== "timeline") return;
+    const target = Array.from(
+      timelineRef.current?.querySelectorAll<HTMLElement>(
+        '[data-testid="run-timeline-asset-label"]',
+      ) ?? [],
+    ).find((element) => element.dataset.asset === scrollRequest.asset);
+    scrollRunElementIntoView(target);
+  }, [scrollRequest]);
+
   const timeline = (
     <div
+      ref={timelineRef}
       className="grid grid-cols-[minmax(7rem,12rem)_minmax(0,1fr)] items-center gap-x-3 p-3"
       data-testid="run-timeline-grid"
       data-row-height={rowHeight}
@@ -1005,10 +1061,11 @@ function RunTimelinePanel({
           bounds={bounds}
           now={now}
           rowHeight={rowHeight}
-          highlighted={hoveredAsset === step.asset}
+          highlighted={highlightedAsset === step.asset}
           onHighlightedChange={(highlighted) =>
             onHoveredAssetChange(highlighted ? step.asset : null)
           }
+          onActivate={() => onActivateAsset(step.asset)}
         />
       ))}
     </div>
@@ -1019,6 +1076,7 @@ function RunTimelinePanel({
         <ScrollArea
           className="h-72 min-w-0"
           viewportClassName="h-full min-h-0"
+          viewportRef={viewportRef}
           data-testid="run-timeline-scroll"
         >
           {timeline}
@@ -1054,6 +1112,7 @@ function StepBar({
   rowHeight,
   highlighted,
   onHighlightedChange,
+  onActivate,
 }: {
   step: PipelineRunStep;
   bounds: { start: number; end: number };
@@ -1061,6 +1120,7 @@ function StepBar({
   rowHeight: number;
   highlighted: boolean;
   onHighlightedChange: (highlighted: boolean) => void;
+  onActivate: () => void;
 }) {
   const start = new Date(step.started_at ?? step.finished_at ?? bounds.start).getTime();
   const end = step.finished_at ? new Date(step.finished_at).getTime() : now;
@@ -1077,9 +1137,10 @@ function StepBar({
     <>
       <Tooltip>
         <TooltipTrigger asChild>
-          <span
+          <button
+            type="button"
             className={cn(
-              "flex min-w-0 items-center rounded-sm font-mono transition-colors",
+              "flex min-w-0 cursor-pointer items-center rounded-sm text-left font-mono transition-colors",
               dense ? "truncate text-[10px] leading-none" : "break-words text-[11px] leading-4",
               highlighted && "bg-primary/10 text-foreground ring-1 ring-primary/30",
             )}
@@ -1089,15 +1150,18 @@ function StepBar({
             style={{ height: rowHeight }}
             onPointerEnter={() => onHighlightedChange(true)}
             onPointerLeave={() => onHighlightedChange(false)}
+            onClick={onActivate}
+            aria-label={`Show events for ${step.asset}`}
           >
             {step.asset}
-          </span>
+          </button>
         </TooltipTrigger>
         <TooltipContent>{step.asset}</TooltipContent>
       </Tooltip>
-      <div
+      <button
+        type="button"
         className={cn(
-          "relative rounded bg-muted/40 transition-colors",
+          "relative cursor-pointer rounded bg-muted/40 transition-colors",
           highlighted && "bg-primary/10 ring-1 ring-inset ring-primary/30",
         )}
         data-testid="run-timeline-track"
@@ -1106,12 +1170,14 @@ function StepBar({
         style={{ height: rowHeight }}
         onPointerEnter={() => onHighlightedChange(true)}
         onPointerLeave={() => onHighlightedChange(false)}
+        onClick={onActivate}
+        aria-label={`Show events for ${step.asset}`}
       >
         <Tooltip>
           <TooltipTrigger asChild>
-            <div
+            <span
               className={cn(
-                "absolute min-w-px rounded transition-[filter,box-shadow]",
+                "absolute block min-w-px rounded transition-[filter,box-shadow]",
                 step.status === "failed"
                   ? "bg-destructive"
                   : step.status === "running"
@@ -1138,7 +1204,7 @@ function StepBar({
             </span>
           </TooltipContent>
         </Tooltip>
-      </div>
+      </button>
     </>
   );
 }
@@ -1148,15 +1214,19 @@ function RunEventsTable({
   steps,
   loading,
   assetIdsByName,
-  hoveredAsset,
+  highlightedAsset,
   onHoveredAssetChange,
+  scrollRequest,
+  onActivateAsset,
 }: {
   run: PipelineRun;
   steps: PipelineRunStep[];
   loading: boolean;
   assetIdsByName: Map<string, string>;
-  hoveredAsset: string | null;
+  highlightedAsset: string | null;
   onHoveredAssetChange: (asset: string | null) => void;
+  scrollRequest: RunScrollRequest | null;
+  onActivateAsset: (asset: string) => void;
 }) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const events = runEvents(run, steps);
@@ -1165,6 +1235,13 @@ function RunEventsTable({
     if (!viewport) return;
     viewport.scrollTop = viewport.scrollHeight;
   }, [events.length, loading]);
+  useEffect(() => {
+    if (scrollRequest?.target !== "events") return;
+    const target = Array.from(
+      viewportRef.current?.querySelectorAll<HTMLElement>('[data-testid="run-event-row"]') ?? [],
+    ).find((element) => element.dataset.asset === scrollRequest.asset);
+    scrollRunElementIntoView(target);
+  }, [scrollRequest]);
   return (
     <ScrollArea className="h-full min-h-0" viewportClassName="h-full" viewportRef={viewportRef}>
       <Table>
@@ -1184,12 +1261,12 @@ function RunEventsTable({
           {events.map((event, index) => {
             const assetId = assetIdsByName.get(event.asset);
             const badge = runEventBadge(event.type);
-            const highlighted = hoveredAsset === event.asset;
+            const highlighted = highlightedAsset === event.asset;
             return (
               <TableRow
                 key={`${event.at}-${event.asset}-${event.type}-${index}`}
                 className={cn(
-                  "transition-colors",
+                  "cursor-pointer transition-colors",
                   highlighted && "bg-primary/10 hover:bg-primary/15",
                 )}
                 data-testid="run-event-row"
@@ -1197,6 +1274,16 @@ function RunEventsTable({
                 data-highlighted={highlighted ? "true" : "false"}
                 onPointerEnter={() => onHoveredAssetChange(event.asset)}
                 onPointerLeave={() => onHoveredAssetChange(null)}
+                onClick={(clickEvent) => {
+                  if ((clickEvent.target as HTMLElement).closest("a, button")) return;
+                  onActivateAsset(event.asset);
+                }}
+                tabIndex={0}
+                onKeyDown={(keyEvent) => {
+                  if (keyEvent.key !== "Enter" && keyEvent.key !== " ") return;
+                  keyEvent.preventDefault();
+                  onActivateAsset(event.asset);
+                }}
               >
                 <TableCell className="h-8 py-1.5 font-mono text-xs text-muted-foreground">
                   {formatSchedulerDate(event.at)}
@@ -1256,6 +1343,14 @@ function runEventBadge(type: string): {
     return { variant: "secondary", tone: "progress" };
   }
   return { variant: "default", tone: "success" };
+}
+
+function scrollRunElementIntoView(target?: HTMLElement) {
+  if (!target) return;
+  target.scrollIntoView({
+    block: "center",
+    behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+  });
 }
 
 function combineRunOutput(logs: PipelineRunLogLine[], error?: string) {

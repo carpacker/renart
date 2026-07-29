@@ -215,6 +215,48 @@ select customer_id, customer_name from analytics.customers
     expect(config.domains).toContain("sales, enterprise");
   });
 
+  test("pipeline connection defaults only offer configured platform and name pairs", async ({
+    liveApp,
+    page,
+  }) => {
+    test.skip(
+      test.info().project.name.includes("mobile"),
+      "Pipeline settings connection picker coverage is desktop-only.",
+    );
+
+    await page.goto(`${liveApp.baseURL}/pipelines/${pipelineId}/assets/${customersAssetId}/code`);
+    await expect(page.locator(".monaco-editor").first()).toBeVisible({ timeout: 15000 });
+    await page.getByRole("button", { name: "Pipeline settings" }).click();
+
+    const dialog = page.getByRole("dialog", { name: /Pipeline settings/ });
+    await dialog.getByRole("tab", { name: "Connections" }).click();
+    const platform = dialog.getByRole("combobox", { name: "Platform" });
+    const connection = dialog.getByRole("combobox", { name: "Connection" });
+    await expect(platform).toContainText("duckdb");
+    await expect(connection).toContainText("duckdb-default");
+    await expect(dialog.getByRole("textbox", { name: "Platform" })).toHaveCount(0);
+    await expect(dialog.getByRole("textbox", { name: "Connection" })).toHaveCount(0);
+
+    await platform.click();
+    await expect(page.getByRole("option", { name: "duckdb" })).toBeVisible();
+    await expect(page.getByRole("option")).toHaveCount(1);
+    await page.getByRole("option", { name: "duckdb" }).click();
+
+    await connection.click();
+    await expect(page.getByRole("option", { name: "duckdb-default" })).toBeVisible();
+    await expect(page.getByRole("option")).toHaveCount(1);
+    await page.getByRole("option", { name: "duckdb-default" }).click();
+    await expect(dialog.getByRole("button", { name: "Add connection" })).toBeDisabled();
+
+    await dialog.getByRole("button", { name: "Remove connection" }).click();
+    await expect(dialog.getByRole("button", { name: "Add connection" })).toBeEnabled();
+    await dialog.getByRole("button", { name: "Add connection" }).click();
+    await expect(dialog.getByRole("combobox", { name: "Platform" })).toContainText("duckdb");
+    await expect(dialog.getByRole("combobox", { name: "Connection" })).toContainText(
+      "duckdb-default",
+    );
+  });
+
   test("pipeline settings keep a fixed full-height layout and manage Python dependencies", async ({
     liveApp,
     page,

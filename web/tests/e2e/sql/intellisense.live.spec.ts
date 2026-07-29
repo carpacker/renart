@@ -802,6 +802,34 @@ test.describe("sql intellisense live", () => {
 
     await replaceEditorContentAndWaitForJinja(page, "select '{{ var.run_mode }}'");
     await setEditorPositionAfterText(page, "var.run_mode");
+    const modifier = process.platform === "darwin" ? "Meta" : "Control";
+    const variableToken = page
+      .locator(".view-lines")
+      .first()
+      .locator("span", { hasText: "run_mode" })
+      .last();
+    await page.keyboard.down(modifier);
+    await variableToken.hover();
+    const variableLink = page
+      .locator(".monaco-editor .goto-definition-link")
+      .filter({ hasText: "run_mode" })
+      .first();
+    await expect(variableLink).toBeVisible({ timeout: 10000 });
+    await expect
+      .poll(async () => {
+        return variableLink.evaluate((element) => {
+          const style = window.getComputedStyle(element);
+          return {
+            cursor: style.cursor,
+            decoration: style.textDecorationLine,
+          };
+        });
+      })
+      .toEqual({
+        cursor: "pointer",
+        decoration: "underline",
+      });
+    await page.keyboard.up(modifier);
     await page.keyboard.press("F12");
 
     const settings = page.getByRole("dialog", { name: /Pipeline settings/ });

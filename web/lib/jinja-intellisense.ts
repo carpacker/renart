@@ -149,6 +149,7 @@ export function registerJinjaProviders(
   onGoToVariable?: (model: MonacoNS.editor.ITextModel, variableName: string) => void,
 ): MonacoNS.IDisposable {
   const disposables: MonacoNS.IDisposable[] = [];
+  const definitionModels = new Set<MonacoNS.editor.ITextModel>();
 
   for (const language of ["sql", "yaml"]) {
     disposables.push(
@@ -245,14 +246,31 @@ export function registerJinjaProviders(
           ) {
             return null;
           }
-          return {
-            uri: monaco.Uri.from({
-              scheme: "renart-settings",
-              authority: "pipeline-variable",
-              path: `/${encodeURIComponent(reference.variableName)}`,
-            }),
-            range: new monaco.Range(1, 1, 1, 1),
-          };
+          const originSelectionRange = new monaco.Range(
+            reference.range.start.lineNumber,
+            reference.range.start.column,
+            reference.range.end.lineNumber,
+            reference.range.end.column,
+          );
+          const uri = monaco.Uri.from({
+            scheme: "renart-settings",
+            authority: "pipeline-variable",
+            path: `/${encodeURIComponent(reference.variableName)}`,
+          });
+          let definitionModel = monaco.editor.getModel(uri);
+          if (!definitionModel) {
+            definitionModel = monaco.editor.createModel(reference.variableName, "plaintext", uri);
+            definitionModels.add(definitionModel);
+          }
+          const targetRange = new monaco.Range(1, 1, 1, reference.variableName.length + 1);
+          return [
+            {
+              originSelectionRange,
+              uri,
+              range: targetRange,
+              targetSelectionRange: targetRange,
+            },
+          ];
         },
       }),
     );
@@ -274,7 +292,14 @@ export function registerJinjaProviders(
     }),
   );
 
-  return { dispose: () => disposables.forEach((disposable) => disposable.dispose()) };
+  return {
+    dispose: () => {
+      disposables.forEach((disposable) => disposable.dispose());
+      definitionModels.forEach((model) => {
+        if (!model.isDisposed()) model.dispose();
+      });
+    },
+  };
 }
 
 function jinjaVariableReferenceAtPosition(

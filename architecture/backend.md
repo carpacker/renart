@@ -162,7 +162,18 @@ production is already primary), with matching DuckDB connections. This keeps
 the project and in-project templates aligned rather than advertising a schedule
 that exists only during onboarding. Keeping the catalog and generated files in
 `service` prevents the frontend from carrying a second copy of scaffold
-contents.
+contents. Three Earthquake assets intentionally bootstrap their destination
+tables in pre-hooks because they demonstrate `truncate+insert`, `time_interval`,
+and `append`, which otherwise require an existing relation on the first run.
+The generated demo contains no post-hooks.
+
+Pipeline configuration updates normalize default connections into one
+connection name per platform. When those defaults change, the service validates
+each platform/name pair against the project's configured connections before
+writing `pipeline.yml`; incomplete rows, duplicate platforms, and unknown pairs
+return a typed bad request. An unchanged legacy pair remains saveable while the
+user edits unrelated settings, so validation does not turn an old project into
+an unrelated migration gate.
 
 The same tracked project file carries the local history-retention policy.
 `/api/config` always returns its effective values, using conservative defaults

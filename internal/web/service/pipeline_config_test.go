@@ -1,13 +1,85 @@
 package service
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/bruin-data/bruin/pkg/pipeline"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	webmodel "renart/internal/web/model"
 )
+
+func TestPipelineDefaultConnectionsMustReferenceConfiguredPairs(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, ".bruin.yml"),
+		[]byte(`default_environment: default
+environments:
+  default:
+    connections:
+      duckdb:
+        - name: duckdb-default
+          path: duckdb-files/default.duckdb
+`),
+		0o600,
+	))
+
+	service := NewPipelineService(root)
+	require.NoError(t, service.validateConfiguredDefaultConnections(
+		pipeline.EmptyStringMap{"duckdb": "duckdb-default"},
+	))
+
+	err := service.validateConfiguredDefaultConnections(
+		pipeline.EmptyStringMap{"duckdb": "missing"},
+	)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidPipelineDefaultConnection)
+	assert.Contains(t, err.Error(), `connection "missing" is not configured`)
+
+	err = service.validateConfiguredDefaultConnections(
+		pipeline.EmptyStringMap{"postgres": "duckdb-default"},
+	)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidPipelineDefaultConnection)
+	assert.Contains(t, err.Error(), `platform "postgres" has no configured project connections`)
+}
+
+func TestNormalizeDefaultConnectionsRejectsIncompleteAndDuplicateRows(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name  string
+		input []webmodel.PipelineConfigConnection
+	}{
+		{
+			name:  "missing platform",
+			input: []webmodel.PipelineConfigConnection{{Name: "duckdb-default"}},
+		},
+		{
+			name:  "missing connection",
+			input: []webmodel.PipelineConfigConnection{{Platform: "duckdb"}},
+		},
+		{
+			name: "duplicate platform",
+			input: []webmodel.PipelineConfigConnection{
+				{Platform: "duckdb", Name: "one"},
+				{Platform: "duckdb", Name: "two"},
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := normalizeDefaultConnections(testCase.input)
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, ErrInvalidPipelineDefaultConnection))
+		})
+	}
+}
 
 func TestInferPipelineDefaultConnections(t *testing.T) {
 	t.Parallel()

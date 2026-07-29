@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -19,6 +21,8 @@ import (
 type PipelineService struct {
 	workspaceRoot string
 }
+
+var ErrInvalidPipelineDefaultConnection = errors.New("invalid pipeline default connection")
 
 func NewPipelineService(workspaceRoot string) *PipelineService {
 	return &PipelineService{workspaceRoot: workspaceRoot}
@@ -294,13 +298,23 @@ func (s *PipelineService) UpdateConfig(ctx context.Context, pipelineID string, r
 		return "", nil, err
 	}
 
+	defaultConnections, err := normalizeDefaultConnections(req.DefaultConnections)
+	if err != nil {
+		return "", nil, err
+	}
+	if !maps.Equal(parsed.DefaultConnections, defaultConnections) {
+		if err := s.validateConfiguredDefaultConnections(defaultConnections); err != nil {
+			return "", nil, err
+		}
+	}
+
 	parsed.Name = strings.TrimSpace(req.Name)
 	parsed.Schedule = pipeline.Schedule(strings.TrimSpace(req.Schedule))
 	parsed.StartDate = strings.TrimSpace(req.StartDate)
 	parsed.Owner = strings.TrimSpace(req.Owner)
 	parsed.Tags = normalizeStringArray(req.Tags)
 	parsed.Domains = normalizeStringArray(req.Domains)
-	parsed.DefaultConnections = buildDefaultConnections(req.DefaultConnections)
+	parsed.DefaultConnections = defaultConnections
 	previousCatchup := parsed.Catchup
 	parsed.Catchup = pipeline.CatchupNone
 	if req.Catchup {
@@ -572,20 +586,80 @@ func normalizeStringArray(values []string) pipeline.EmptyStringArray {
 	return result
 }
 
-func buildDefaultConnections(input []webmodel.PipelineConfigConnection) pipeline.EmptyStringMap {
+func normalizeDefaultConnections(
+	input []webmodel.PipelineConfigConnection,
+) (pipeline.EmptyStringMap, error) {
 	result := make(map[string]string)
 	for _, item := range input {
 		platform := strings.TrimSpace(item.Platform)
 		name := strings.TrimSpace(item.Name)
 		if platform == "" || name == "" {
-			continue
+			return nil, fmt.Errorf(
+				"%w: platform and connection are both required",
+				ErrInvalidPipelineDefaultConnection,
+			)
+		}
+		if _, exists := result[platform]; exists {
+			return nil, fmt.Errorf(
+				"%w: platform %q is configured more than once",
+				ErrInvalidPipelineDefaultConnection,
+				platform,
+			)
 		}
 		result[platform] = name
 	}
 	if len(result) == 0 {
+		return nil, nil
+	}
+	return result, nil
+}
+
+func (s *PipelineService) validateConfiguredDefaultConnections(
+	defaults pipeline.EmptyStringMap,
+) error {
+	if len(defaults) == 0 {
 		return nil
 	}
-	return result
+
+	cfg, _, err := NewConfigService(s.workspaceRoot, "").LoadReadOnly()
+	if err != nil {
+		return fmt.Errorf("load project connections: %w", err)
+	}
+	available := make(map[string]map[string]struct{})
+	for _, environment := range cfg.Environments {
+		for _, connection := range buildWorkspaceConfigConnections(environment.Connections) {
+			if available[connection.Type] == nil {
+				available[connection.Type] = make(map[string]struct{})
+			}
+			available[connection.Type][connection.Name] = struct{}{}
+		}
+	}
+
+	platforms := make([]string, 0, len(defaults))
+	for platform := range defaults {
+		platforms = append(platforms, platform)
+	}
+	sort.Strings(platforms)
+	for _, platform := range platforms {
+		name := defaults[platform]
+		names := available[platform]
+		if len(names) == 0 {
+			return fmt.Errorf(
+				"%w: platform %q has no configured project connections",
+				ErrInvalidPipelineDefaultConnection,
+				platform,
+			)
+		}
+		if _, exists := names[name]; !exists {
+			return fmt.Errorf(
+				"%w: connection %q is not configured for platform %q in any environment",
+				ErrInvalidPipelineDefaultConnection,
+				name,
+				platform,
+			)
+		}
+	}
+	return nil
 }
 
 // pipelineConnectionSummaries loads assets only for the settings response. The
