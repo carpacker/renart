@@ -779,12 +779,6 @@ function RunPlanReview({
   onLoadStageContent: () => void;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [operationsOpen, setOperationsOpen] = useState(false);
-  const runtimeChecks = plan.assets.flatMap((asset) =>
-    asset.renders.flatMap((render) => render.stages.filter((stage) => stage.kind === "check")),
-  );
-  const maxActiveSteps = plan.context.max_active_steps;
-  const conservativelySerializedAssets = conservativeTargetIsolationCount(plan);
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-5 p-5">
@@ -803,46 +797,14 @@ function RunPlanReview({
         </Alert>
       ) : null}
 
-      <section aria-labelledby="pipeline-plan-execution-order">
-        <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
-          <div>
-            <h3 id="pipeline-plan-execution-order" className="text-sm font-medium">
-              Execution order
-            </h3>
-            <p className="text-xs text-muted-foreground">
-              {plan.summary.execution_units} {plan.summary.execution_units === 1 ? "step" : "steps"}{" "}
-              across {plan.summary.assets} {plan.summary.assets === 1 ? "asset" : "assets"}, shown
-              in stable plan order
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {maxActiveSteps > 1
-                ? `Up to ${maxActiveSteps} assets may run concurrently. Dependencies, connection limits, and shared targets can reduce that number.`
-                : "Assets will run one at a time for this pipeline."}
-              {conservativelySerializedAssets > 0
-                ? ` ${conservativelySerializedAssets} ${conservativelySerializedAssets === 1 ? "asset uses" : "assets use"} conservative target isolation and will run alone.`
-                : ""}
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-1">
-            <Badge variant="outline" size="xs">
-              {maxActiveSteps > 1 ? `Up to ${maxActiveSteps} active` : "Sequential"}
-            </Badge>
-            {runtimeChecks.length > 0 ? (
-              <Badge variant="outline" size="xs">
-                {runtimeChecks.length} runtime {runtimeChecks.length === 1 ? "check" : "checks"}
-              </Badge>
-            ) : null}
-            {plan.summary.destructive_operations > 0 ? (
-              <Badge variant="destructive" size="xs">
-                {plan.summary.destructive_operations} destructive
-              </Badge>
-            ) : null}
-          </div>
-        </div>
-        <PlanExecutionSequence plan={plan} />
-      </section>
-
       <PlanCodeReview plan={plan} />
+
+      <PlanExecutionReview
+        plan={plan}
+        contentLoading={contentLoading}
+        contentLoaded={contentLoaded}
+        onLoadStageContent={onLoadStageContent}
+      />
 
       <Collapsible open={detailsOpen} onOpenChange={setDetailsOpen} className="rounded-lg border">
         <CollapsibleTrigger asChild>
@@ -858,34 +820,6 @@ function RunPlanReview({
         </CollapsibleTrigger>
         <CollapsibleContent className="border-t p-3">
           <RunPlanDetails plan={plan} />
-        </CollapsibleContent>
-      </Collapsible>
-
-      <Collapsible
-        open={operationsOpen}
-        onOpenChange={(nextOpen) => {
-          setOperationsOpen(nextOpen);
-          if (nextOpen) onLoadStageContent();
-        }}
-        className="rounded-lg border"
-      >
-        <CollapsibleTrigger asChild>
-          <Button variant="ghost" className="h-auto w-full justify-start rounded-lg px-3 py-2.5">
-            <ChevronRight
-              className={cn("size-4 shrink-0 transition-transform", operationsOpen && "rotate-90")}
-            />
-            <span className="font-medium">Rendered operations</span>
-            <span className="truncate text-xs font-normal text-muted-foreground">
-              inspect generated SQL and runtime operations
-            </span>
-          </Button>
-        </CollapsibleTrigger>
-        <CollapsibleContent className="border-t p-3">
-          <PlanExecution
-            plan={plan}
-            contentLoading={contentLoading}
-            contentLoaded={contentLoaded}
-          />
         </CollapsibleContent>
       </Collapsible>
     </div>
@@ -928,7 +862,6 @@ function DeployPlanReview({
   const [assetsOpen, setAssetsOpen] = useState(false);
   const [checksOpen, setChecksOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [operationsOpen, setOperationsOpen] = useState(false);
   const schedulesRef = useRef<HTMLDivElement | null>(null);
   const runtimeChecks = plan.assets.flatMap((asset) =>
     asset.renders.flatMap((render) => render.stages.filter((stage) => stage.kind === "check")),
@@ -997,6 +930,14 @@ function DeployPlanReview({
 
       <PlanCodeReview plan={plan} />
 
+      <PlanExecutionReview
+        plan={plan}
+        contentLoading={contentLoading}
+        contentLoaded={contentLoaded}
+        onLoadStageContent={onLoadStageContent}
+        representative
+      />
+
       <Collapsible open={assetsOpen} onOpenChange={setAssetsOpen} className="rounded-lg border">
         <CollapsibleTrigger asChild>
           <Button variant="ghost" className="h-auto w-full justify-start rounded-lg px-3 py-2.5">
@@ -1052,34 +993,6 @@ function DeployPlanReview({
         </CollapsibleContent>
       </Collapsible>
 
-      <Collapsible
-        open={operationsOpen}
-        onOpenChange={(nextOpen) => {
-          setOperationsOpen(nextOpen);
-          if (nextOpen) onLoadStageContent();
-        }}
-        className="rounded-lg border"
-      >
-        <CollapsibleTrigger asChild>
-          <Button variant="ghost" className="h-auto w-full justify-start rounded-lg px-3 py-2.5">
-            <ChevronRight
-              className={cn("size-4 shrink-0 transition-transform", operationsOpen && "rotate-90")}
-            />
-            <span className="font-medium">Representative execution</span>
-            <span className="truncate text-xs font-normal text-muted-foreground">
-              inspect generated SQL and runtime operations
-            </span>
-          </Button>
-        </CollapsibleTrigger>
-        <CollapsibleContent className="border-t p-3">
-          <PlanExecution
-            plan={plan}
-            contentLoading={contentLoading}
-            contentLoaded={contentLoaded}
-          />
-        </CollapsibleContent>
-      </Collapsible>
-
       <div ref={schedulesRef}>
         <Collapsible
           open={schedulesOpen}
@@ -1115,6 +1028,120 @@ function DeployPlanReview({
         </Collapsible>
       </div>
     </div>
+  );
+}
+
+function PlanExecutionReview({
+  plan,
+  contentLoading,
+  contentLoaded,
+  onLoadStageContent,
+  representative = false,
+}: {
+  plan: PipelinePlan;
+  contentLoading: boolean;
+  contentLoaded: boolean;
+  onLoadStageContent: () => void;
+  representative?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const runtimeChecks = plan.assets.flatMap((asset) =>
+    asset.renders.flatMap((render) => render.stages.filter((stage) => stage.kind === "check")),
+  );
+  const maxActiveSteps = plan.context.max_active_steps;
+  const conservativelySerializedAssets = conservativeTargetIsolationCount(plan);
+  const suffix = representative ? "deploy" : "run";
+
+  return (
+    <Collapsible
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (nextOpen) onLoadStageContent();
+      }}
+      className="rounded-lg border"
+    >
+      <CollapsibleTrigger asChild>
+        <Button variant="ghost" className="h-auto w-full justify-start rounded-lg px-3 py-2.5">
+          <ChevronRight
+            className={cn("size-4 shrink-0 transition-transform", open && "rotate-90")}
+          />
+          <span className="font-medium">Execution details</span>
+          <span className="truncate text-xs font-normal text-muted-foreground">
+            {plan.summary.execution_units} {representative ? "representative " : ""}
+            {plan.summary.execution_units === 1 ? "step" : "steps"} · order and rendered operations
+          </span>
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="border-t p-3">
+        <div className="space-y-5">
+          <section aria-labelledby={`pipeline-plan-execution-order-${suffix}`}>
+            <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
+              <div>
+                <h3 id={`pipeline-plan-execution-order-${suffix}`} className="text-sm font-medium">
+                  Execution order
+                </h3>
+                <p className="text-xs text-muted-foreground">
+                  {plan.summary.execution_units}{" "}
+                  {plan.summary.execution_units === 1 ? "step" : "steps"} across{" "}
+                  {plan.summary.assets} {plan.summary.assets === 1 ? "asset" : "assets"}, shown in
+                  stable plan order
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {representative
+                    ? "Scheduled runs render these operations again with their own execution context. "
+                    : ""}
+                  {maxActiveSteps > 1
+                    ? `Up to ${maxActiveSteps} assets may run concurrently. Dependencies, connection limits, and shared targets can reduce that number.`
+                    : "Assets will run one at a time for this pipeline."}
+                  {conservativelySerializedAssets > 0
+                    ? ` ${conservativelySerializedAssets} ${conservativelySerializedAssets === 1 ? "asset uses" : "assets use"} conservative target isolation and will run alone.`
+                    : ""}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-1">
+                <Badge variant="outline" size="xs">
+                  {maxActiveSteps > 1 ? `Up to ${maxActiveSteps} active` : "Sequential"}
+                </Badge>
+                {runtimeChecks.length > 0 ? (
+                  <Badge variant="outline" size="xs">
+                    {runtimeChecks.length} runtime {runtimeChecks.length === 1 ? "check" : "checks"}
+                  </Badge>
+                ) : null}
+                {plan.summary.destructive_operations > 0 ? (
+                  <Badge variant="destructive" size="xs">
+                    {plan.summary.destructive_operations} destructive
+                  </Badge>
+                ) : null}
+              </div>
+            </div>
+            <PlanExecutionSequence plan={plan} />
+          </section>
+
+          <section
+            className="border-t pt-4"
+            aria-labelledby={`pipeline-plan-rendered-operations-${suffix}`}
+          >
+            <div className="mb-2">
+              <h3
+                id={`pipeline-plan-rendered-operations-${suffix}`}
+                className="text-sm font-medium"
+              >
+                Rendered operations
+              </h3>
+              <p className="text-xs text-muted-foreground">
+                Inspect generated SQL and runtime operations before continuing.
+              </p>
+            </div>
+            <PlanExecution
+              plan={plan}
+              contentLoading={contentLoading}
+              contentLoaded={contentLoaded}
+            />
+          </section>
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 

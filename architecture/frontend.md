@@ -153,8 +153,11 @@ not underscore-flattened route hacks.
   saved working tree or immutable deployment, environment, UTC interval,
   refresh/sensor mode, asset and execution-unit counts, checks, blockers,
   warnings, and source/configuration/variable identities. Run review is one
-  linear reading path: readiness issues, exact ordered asset/window units with
-  their operation/check sequence, and code-check findings. Run options stay
+  linear reading path: readiness issues and code-check findings, followed by a
+  shared, initially collapsed Execution details section containing the exact
+  ordered asset/window units and their rendered operation/check sequence. The
+  deployment review uses the same section for representative execution.
+  Runtime-only Python notices are aggregated across affected assets. Run options stay
   visible in a compact responsive row: scope receives the most room, sensor
   policy stays secondary, full refresh is an explicit switch, and the selector
   editor only appears when that scope needs it. Source identities, resource
@@ -163,7 +166,7 @@ not underscore-flattened route hacks.
   body share one vertical ScrollArea so the scrollbar never changes the width
   between its upper and middle sections; confirmation remains fixed beneath it.
   Successful code checks use one compact green result while assets with
-  findings retain their expanded messages. Opening Rendered operations lazily
+  findings retain their expanded messages. Opening Execution details lazily
   requests redacted
   stage content and shows compiled queries, generated materialization SQL,
   checks, and semantic/runtime-only operations in read-only Monaco with

@@ -855,6 +855,49 @@ func pipelinePlanIssueCodes(issues []PipelinePlanIssue) []string {
 	return codes
 }
 
+func TestAggregatePythonRuntimePlanWarnings(t *testing.T) {
+	t.Parallel()
+
+	assets := []PipelinePlanAsset{
+		{ID: "pipeline:python-a", Name: "analytics.python_a", Type: "python"},
+		{ID: "pipeline:sql", Name: "analytics.sql", Type: "duckdb.sql"},
+		{ID: "pipeline:python-b", Name: "analytics.python_b", Type: "python"},
+	}
+	issues := []PipelinePlanIssue{
+		{
+			Code:      "asset_render_partial",
+			Severity:  "warning",
+			Message:   "some execution details are only available at runtime",
+			AssetID:   "pipeline:python-a",
+			AssetName: "analytics.python_a",
+		},
+		{
+			Code:      "asset_render_partial",
+			Severity:  "warning",
+			Message:   "one or more execution stages cannot be rendered statically",
+			AssetID:   "pipeline:sql",
+			AssetName: "analytics.sql",
+		},
+		{
+			Code:      "asset_render_partial",
+			Severity:  "warning",
+			Message:   "the physical output target is only available at runtime",
+			AssetID:   "pipeline:python-b",
+			AssetName: "analytics.python_b",
+		},
+	}
+
+	assert.Equal(t, []PipelinePlanIssue{
+		{
+			Code:     "python_execution_runtime_only",
+			Severity: "warning",
+			Message: "execution details for 2 Python assets are resolved at runtime: " +
+				"analytics.python_a, analytics.python_b",
+		},
+		issues[1],
+	}, aggregatePythonRuntimePlanWarnings(assets, issues))
+}
+
 func findPipelinePlanAsset(t *testing.T, plan PipelinePlan, name string) PipelinePlanAsset {
 	t.Helper()
 	for _, asset := range plan.Assets {

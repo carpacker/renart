@@ -691,6 +691,7 @@ func (s *PipelinePlanService) Plan(
 	}
 	base.Readiness.Blockers = dedupePipelinePlanIssues(base.Readiness.Blockers)
 	base.Readiness.Warnings = dedupePipelinePlanIssues(base.Readiness.Warnings)
+	base.Readiness.Warnings = aggregatePythonRuntimePlanWarnings(base.Assets, base.Readiness.Warnings)
 	base.Summary.Assets = len(base.Assets)
 	base.Summary.ExecutionUnits = len(base.ExecutionUnits)
 	base.Summary.Blockers = len(base.Readiness.Blockers)
@@ -1448,6 +1449,66 @@ func dedupePipelinePlanIssues(issues []PipelinePlanIssue) []PipelinePlanIssue {
 		}
 		seen[key] = struct{}{}
 		result = append(result, issue)
+	}
+	return result
+}
+
+func aggregatePythonRuntimePlanWarnings(
+	assets []PipelinePlanAsset,
+	issues []PipelinePlanIssue,
+) []PipelinePlanIssue {
+	pythonAssets := make(map[string]string)
+	for _, asset := range assets {
+		if strings.Contains(strings.ToLower(asset.Type), "python") {
+			pythonAssets[asset.ID] = asset.Name
+		}
+	}
+
+	names := make([]string, 0)
+	for _, issue := range issues {
+		if issue.Code != "asset_render_partial" ||
+			!strings.Contains(strings.ToLower(issue.Message), "runtime") {
+			continue
+		}
+		if name, ok := pythonAssets[issue.AssetID]; ok {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return issues
+	}
+
+	result := make([]PipelinePlanIssue, 0, len(issues)-len(names)+1)
+	added := false
+	for _, issue := range issues {
+		_, isPython := pythonAssets[issue.AssetID]
+		isRuntimeWarning := issue.Code == "asset_render_partial" &&
+			strings.Contains(strings.ToLower(issue.Message), "runtime")
+		if !isPython || !isRuntimeWarning {
+			result = append(result, issue)
+			continue
+		}
+		if added {
+			continue
+		}
+		added = true
+		if len(names) == 1 {
+			result = append(result, PipelinePlanIssue{
+				Code:     "python_execution_runtime_only",
+				Severity: "warning",
+				Message:  fmt.Sprintf("execution details for Python asset %s are resolved at runtime", names[0]),
+			})
+			continue
+		}
+		result = append(result, PipelinePlanIssue{
+			Code:     "python_execution_runtime_only",
+			Severity: "warning",
+			Message: fmt.Sprintf(
+				"execution details for %d Python assets are resolved at runtime: %s",
+				len(names),
+				strings.Join(names, ", "),
+			),
+		})
 	}
 	return result
 }

@@ -458,10 +458,8 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
     await expect(
       reviewViewport.getByRole("heading", { name: "Review pipeline run" }),
     ).toBeVisible();
-    await expect(reviewViewport.getByRole("heading", { name: "Execution order" })).toBeVisible();
-    await expect(reviewViewport).toContainText("shown in stable plan order");
-    await expect(reviewViewport).toContainText("Assets will run one at a time for this pipeline.");
-    await expect(reviewViewport.getByText("Sequential", { exact: true })).toBeVisible();
+    await expect(planSheet.getByRole("button", { name: /Execution details/ })).toBeVisible();
+    await expect(reviewViewport.getByRole("heading", { name: "Execution order" })).toHaveCount(0);
     await expect(planSheet.getByText("Run options", { exact: true })).toBeVisible();
     await expect(planSheet.getByLabel("Scope")).toBeVisible();
     await expect(planSheet.getByLabel("Sensors")).toBeVisible();
@@ -483,13 +481,20 @@ select 1 as customer_id,'Ada' as customer_name union all select 2 as customer_id
         response.ok(),
       { timeout: 30000 },
     );
-    await planSheet.getByRole("button", { name: /Rendered operations/ }).click();
+    await planSheet.getByRole("button", { name: /Execution details/ }).click();
     const renderedPlan = await renderedPlanResponse;
     expect(renderedPlan.request().postDataJSON()).toMatchObject({
       include_stage_content: true,
       source: { kind: "working_tree" },
       selection: { mode: "all" },
     });
+    await expect(reviewViewport.getByRole("heading", { name: "Execution order" })).toBeVisible();
+    await expect(reviewViewport).toContainText("shown in stable plan order");
+    await expect(reviewViewport).toContainText("Assets will run one at a time for this pipeline.");
+    await expect(reviewViewport.getByText("Sequential", { exact: true })).toBeVisible();
+    await expect(
+      reviewViewport.getByRole("heading", { name: "Rendered operations" }),
+    ).toBeVisible();
     await expect(planSheet.getByText("Preview — not executed")).toBeVisible();
     const operationSelect = planSheet.getByRole("combobox", { name: "Operation" });
     await expect(planSheet.locator(".view-lines").first()).toContainText("save barrier e2e", {
