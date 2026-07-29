@@ -3,7 +3,7 @@ import { createServer, type Server } from "node:http";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { liveTest as test } from "../live-app-fixture";
+import { liveTest as test, timeoutForRetry } from "../live-app-fixture";
 
 type WorkspaceResponse = {
   pipelines: Array<{
@@ -560,6 +560,10 @@ parameters:
   });
 
   test("paginated API asset materializes all requested pages", async ({ liveApp, page }) => {
+    // The first API materialization on a clean machine may also install uv and
+    // resolve Sling. Keep that legitimate cold start outside the suite's short
+    // UI-oriented default timeout.
+    test.setTimeout(timeoutForRetry(test.info(), 120000, 60000));
     const apiServer = await startAPIExecutionServer();
     try {
       await writeFile(
@@ -623,6 +627,7 @@ parameters:
   });
 
   test("POST API asset sends JSON body and auth header", async ({ liveApp, page }) => {
+    test.setTimeout(timeoutForRetry(test.info(), 120000, 60000));
     const apiServer = await startAPIExecutionServer();
     try {
       await writeFile(
@@ -676,6 +681,7 @@ parameters:
     liveApp,
     page,
   }) => {
+    test.setTimeout(timeoutForRetry(test.info(), 120000, 60000));
     const apiServer = await startAPIExecutionServer();
     try {
       await writeFile(

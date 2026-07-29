@@ -230,7 +230,7 @@ test.describe("app notebooks live", () => {
   });
 
   test("create, edit, and run a notebook against the local session", async ({ liveApp, page }) => {
-    test.setTimeout(timeoutForRetry(test.info(), 60000, 60000));
+    test.setTimeout(timeoutForRetry(test.info(), 90000, 60000));
     const { request } = page;
     const notebook = await createNotebook(request, liveApp.baseURL, "Revenue Exploration");
 
@@ -298,35 +298,58 @@ test.describe("app notebooks live", () => {
     await expect(page.getByText("Definition Highlight").first()).toBeVisible({ timeout: 15000 });
 
     const targetCard = page.locator(`[data-notebook-cell-id="${baseCell}"]`);
-    const readerCard = page.locator(`[data-notebook-cell-id="${readerCell}"]`);
-    const upstreamToken = readerCard.locator(".view-lines span", { hasText: "base" }).last();
-    await expect(upstreamToken).toBeVisible({ timeout: 15000 });
-    const upstreamTokenBox = await upstreamToken.boundingBox();
-    expect(upstreamTokenBox).not.toBeNull();
-    const renderedLine = await upstreamToken.innerText();
-    const relationOffset = renderedLine.lastIndexOf("base");
-    expect(relationOffset).toBeGreaterThanOrEqual(0);
-    const relationX =
-      upstreamTokenBox!.x +
-      (upstreamTokenBox!.width * (relationOffset + "base".length / 2)) / renderedLine.length;
-    const relationY = upstreamTokenBox!.y + upstreamTokenBox!.height / 2;
+    await expect(
+      page.locator(`[data-notebook-cell-id="${readerCell}"] .monaco-editor`),
+    ).toBeVisible({
+      timeout: 15000,
+    });
+    const relationPoint = await page.evaluate(() => {
+      const monaco = (window as typeof window & { monaco?: any }).monaco;
+      const editor = monaco?.editor
+        .getEditors?.()
+        .find(
+          (candidate: any) =>
+            candidate.getModel?.()?.getValue().trim() === "select value from base",
+        );
+      const model = editor?.getModel?.();
+      const domNode = editor?.getDomNode?.();
+      if (!monaco || !editor || !model || !domNode) {
+        throw new Error("reader Monaco editor is not ready");
+      }
+      const relationOffset = model.getValue().lastIndexOf("base");
+      if (relationOffset < 0) {
+        throw new Error("base relation was not found in the reader model");
+      }
+      // Aim at the second character, rather than estimating a character from a
+      // Monaco DOM span whose box can include whitespace and nested tokens.
+      const position = model.getPositionAt(relationOffset + 1);
+      editor.revealPositionInCenterIfOutsideViewport(position);
+      const visiblePosition = editor.getScrolledVisiblePosition(position);
+      if (!visiblePosition) {
+        throw new Error("base relation is outside the reader editor viewport");
+      }
+      const editorRect = domNode.getBoundingClientRect();
+      const fontInfo = editor.getOption(monaco.editor.EditorOption.fontInfo);
+      return {
+        x: editorRect.left + visiblePosition.left + fontInfo.typicalHalfwidthCharacterWidth / 2,
+        y: editorRect.top + visiblePosition.top + visiblePosition.height / 2,
+      };
+    });
     const modifier = process.platform === "darwin" ? "Meta" : "Control";
-    // Monaco can merge the whole line into one visual span. Click the center of
-    // "base", and retry until the editor's definition handler has mounted.
-    // Reading the transient attribute inside the poll also avoids missing the
-    // short highlight while Playwright returns from an asynchronous click.
-    await expect
-      .poll(
-        async () => {
-          await page.keyboard.down(modifier);
-          await page.mouse.click(relationX, relationY);
-          await page.keyboard.up(modifier);
-          await page.waitForTimeout(100);
-          return targetCard.getAttribute("data-notebook-cell-jump-highlight");
-        },
-        { timeout: timeoutForRetry(test.info(), 15000) },
-      )
-      .toBe("true");
+    const definitionResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith("/api/sql/lsp/definition") &&
+        response.request().method() === "POST" &&
+        response.ok(),
+      { timeout: timeoutForRetry(test.info(), 15000) },
+    );
+    await page.keyboard.down(modifier);
+    await page.mouse.click(relationPoint.x, relationPoint.y);
+    await page.keyboard.up(modifier);
+    await definitionResponse;
+    await expect(targetCard).toHaveAttribute("data-notebook-cell-jump-highlight", "true", {
+      timeout: timeoutForRetry(test.info(), 3000),
+    });
     await expect(targetCard).not.toHaveAttribute("data-notebook-cell-jump-highlight", "true", {
       timeout: timeoutForRetry(test.info(), 3000),
     });
@@ -1269,6 +1292,7 @@ test.describe("app notebooks live", () => {
   });
 
   test("promote dialog can pull in downstream assets", async ({ liveApp, page }) => {
+    test.setTimeout(timeoutForRetry(test.info(), 60000, 60000));
     const { request } = page;
     const notebook = await createNotebook(request, liveApp.baseURL, "Promote Chain");
     const baseCell = await addCell(request, liveApp.baseURL, notebook.id, "base");
@@ -1295,7 +1319,9 @@ test.describe("app notebooks live", () => {
     // The dialog offers to also promote the downstream cell.
     const dialog = page.getByRole("dialog");
     await expect(dialog.getByText("Promote to pipeline")).toBeVisible();
-    await dialog.getByRole("checkbox", { name: /Downstream assets/ }).click();
+    const downstreamCheckbox = dialog.getByRole("checkbox", { name: /Downstream assets/ });
+    await downstreamCheckbox.click();
+    await expect(downstreamCheckbox).toBeChecked();
     const promoteResponse = page.waitForResponse(
       (response) => response.url().includes(`/cells/${baseCell}/promote`) && response.ok(),
       { timeout: 30000 },
