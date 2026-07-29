@@ -224,6 +224,59 @@ test.describe("app scheduler pages live", () => {
       "750ms",
       "1000ms",
     ]);
+    await expect(page.getByTestId("run-timeline-grid")).toHaveAttribute("data-row-height", "28");
+    await expect(page.getByTestId("run-timeline-scroll")).toHaveCount(0);
+  });
+
+  test("fits nineteen timeline rows before scrolling at twenty", async ({ liveApp, page }) => {
+    await page.route("**/api/runs/timeline-density-*", async (route) => {
+      const runId = route.request().url().split("/").pop() ?? "";
+      const count = runId.endsWith("-20") ? 20 : 19;
+      const startedAt = new Date("2026-07-22T08:00:00.000Z");
+      const finishedAt = new Date(startedAt.getTime() + 1000);
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: "ok",
+          run: {
+            id: runId,
+            pipeline_id: analyticsPipelineId,
+            pipeline: "analytics",
+            environment: "default",
+            trigger: "manual",
+            status: "success",
+            started_at: startedAt.toISOString(),
+            finished_at: finishedAt.toISOString(),
+            execution_context_resolved: true,
+          },
+          logs: [],
+          steps: Array.from({ length: count }, (_, index) => ({
+            run_id: runId,
+            asset: `analytics.asset_${String(index + 1).padStart(2, "0")}`,
+            status: "success",
+            started_at: new Date(startedAt.getTime() + index * 10).toISOString(),
+            finished_at: new Date(startedAt.getTime() + 500 + index * 10).toISOString(),
+          })),
+        }),
+      });
+    });
+
+    await page.goto(`${liveApp.baseURL}/runs/timeline-density-19`);
+    await expect(page.getByTestId("run-timeline-grid")).toHaveAttribute("data-row-height", "12");
+    await expect(page.getByTestId("run-timeline-track")).toHaveCount(19);
+    await expect(page.getByTestId("run-timeline-scroll")).toHaveCount(0);
+
+    await page.goto(`${liveApp.baseURL}/runs/timeline-density-20`);
+    await expect(page.getByTestId("run-timeline-grid")).toHaveAttribute("data-row-height", "16");
+    await expect(page.getByTestId("run-timeline-track")).toHaveCount(20);
+    const scroll = page.getByTestId("run-timeline-scroll");
+    await expect(scroll).toBeVisible();
+    expect(
+      await scroll
+        .locator(':scope > [data-slot="scroll-area-viewport"]')
+        .evaluate((viewport) => viewport.scrollHeight > viewport.clientHeight),
+    ).toBe(true);
   });
 
   test("renders follower ownership as read-only", async ({ liveApp, page }) => {
@@ -827,7 +880,13 @@ test.describe("app scheduler pages live", () => {
       await expect(timelineBar).toHaveAttribute("data-slot", "tooltip-trigger");
       await expect(
         timelineTrack.locator('xpath=ancestor::*[@data-slot="scroll-area-viewport"]'),
-      ).toHaveCount(1);
+      ).toHaveCount(0);
+
+      const eventRow = page.getByTestId("run-event-row").filter({ hasText: stepAsset }).first();
+      await timelineTrack.hover();
+      await expect(eventRow).toHaveAttribute("data-highlighted", "true");
+      await eventRow.hover();
+      await expect(timelineTrack).toHaveAttribute("data-highlighted", "true");
 
       const assetLink = page.getByRole("link", { name: stepAsset, exact: true }).first();
       await expect(assetLink).toHaveAttribute(

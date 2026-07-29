@@ -363,7 +363,11 @@ not underscore-flattened route hacks.
   section, scrolls to the matching definition, and highlights it.
   Run details use semantic event badges, link current-workspace asset events
   back to the split Build view, and render timeline asset names in a dedicated
-  wrapping column with tooltips so short duration bars never truncate identity.
+  column with full-name tooltips. Timeline rows contract from 28px to 12px as
+  the run grows so as many as 19 assets remain visible without an inner
+  scrollbar; 20 or more use a fixed 16px row and an independent ScrollArea.
+  Hovering an asset timeline row or one of its event rows highlights the
+  matching rows in both views.
   Queue-backed active runs expose a destructive, confirmed Abort run action.
   A running cancellation shows `Stopping` from River's durable request state
   until the terminal SSE event replaces it; queued cancellation becomes
@@ -376,9 +380,8 @@ not underscore-flattened route hacks.
   per-connection limits, and conservative/shared targets can lower effective
   overlap. `run.unit` SSE updates that ledger live without
   teaching unrelated asset-result consumers to treat units as pipeline steps.
-  The asset timeline scrolls independently when a run has many assets, keeping
-  the event/output panel usable, and duration tooltips anchor to the duration
-  bars rather than the full timeline tracks.
+  Duration tooltips anchor to the duration bars rather than the full timeline
+  tracks.
   Schedule rows keep cadence, timezone, last-run result, deployment, catch-up,
   and runtime-window context in a wrapping metadata area rather than one
   truncated status line. Timeline and actions have dedicated columns: `Run

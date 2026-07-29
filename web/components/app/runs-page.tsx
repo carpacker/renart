@@ -292,6 +292,8 @@ export function AppRunDetailPage({
   } | null>(null);
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
+  const [hoveredAsset, setHoveredAsset] = useState<string | null>(null);
+  useEffect(() => setHoveredAsset(null), [runId]);
   const output = useMemo(() => combineRunOutput(logs, run?.error), [logs, run?.error]);
   const assetIdsByName = useMemo(() => {
     const pipeline = workspace?.pipelines.find((candidate) => candidate.id === run?.pipeline_id);
@@ -571,7 +573,12 @@ export function AppRunDetailPage({
         </div>
       ) : null}
       <div className="flex min-h-0 flex-1 flex-col gap-3 px-3 pb-3">
-        <RunTimelinePanel run={run} steps={steps} />
+        <RunTimelinePanel
+          run={run}
+          steps={steps}
+          hoveredAsset={hoveredAsset}
+          onHoveredAssetChange={setHoveredAsset}
+        />
         <AppPanel className="min-h-0 flex-1 overflow-hidden">
           <Tabs
             defaultValue="events"
@@ -610,6 +617,8 @@ export function AppRunDetailPage({
                 steps={steps}
                 loading={loadingRunId === run.id}
                 assetIdsByName={assetIdsByName}
+                hoveredAsset={hoveredAsset}
+                onHoveredAssetChange={setHoveredAsset}
               />
             </TabsContent>
             {plan ? (
@@ -951,32 +960,72 @@ function runPlanStageBadgeVariant(
   return fidelity === "exact" ? "secondary" : "outline";
 }
 
-function RunTimelinePanel({ run, steps }: { run: PipelineRun; steps: PipelineRunStep[] }) {
+function RunTimelinePanel({
+  run,
+  steps,
+  hoveredAsset,
+  onHoveredAssetChange,
+}: {
+  run: PipelineRun;
+  steps: PipelineRunStep[];
+  hoveredAsset: string | null;
+  onHoveredAssetChange: (asset: string | null) => void;
+}) {
   const now = useNow(run.status === "running");
   const bounds = timelineBounds(run, steps, now);
   const counts = countSteps(steps);
+  const scrollable = steps.length >= 20;
+  const rowHeight = timelineRowHeight(steps.length);
+  const timeline = (
+    <div
+      className="grid grid-cols-[minmax(7rem,12rem)_minmax(0,1fr)] items-center gap-x-3 p-3"
+      data-testid="run-timeline-grid"
+      data-row-height={rowHeight}
+    >
+      <div aria-hidden="true" />
+      <div
+        className="flex h-5 items-center text-[11px] text-muted-foreground"
+        data-testid="run-timeline-axis"
+      >
+        {timelineTicks(bounds).map((tick, index) => (
+          <div key={`${index}-${tick.label}`} className="min-w-0 flex-1 font-mono">
+            {tick.label}
+          </div>
+        ))}
+      </div>
+      {steps.length === 0 ? (
+        <div className="col-span-2 rounded-md border border-dashed p-6 text-center text-xs text-muted-foreground">
+          Asset timings will appear here for direct backend runs.
+        </div>
+      ) : null}
+      {steps.map((step) => (
+        <StepBar
+          key={`${step.run_id}-${step.asset}`}
+          step={step}
+          bounds={bounds}
+          now={now}
+          rowHeight={rowHeight}
+          highlighted={hoveredAsset === step.asset}
+          onHighlightedChange={(highlighted) =>
+            onHoveredAssetChange(highlighted ? step.asset : null)
+          }
+        />
+      ))}
+    </div>
+  );
   return (
     <AppPanel className="grid shrink-0 grid-cols-1 overflow-hidden lg:grid-cols-[minmax(0,1fr)_18rem]">
-      <ScrollArea className="max-h-72 min-w-0" viewportClassName="min-h-0">
-        <div className="grid grid-cols-[minmax(7rem,12rem)_minmax(0,1fr)] items-center gap-x-3 gap-y-2 p-3">
-          <div aria-hidden="true" />
-          <div className="flex text-[11px] text-muted-foreground" data-testid="run-timeline-axis">
-            {timelineTicks(bounds).map((tick, index) => (
-              <div key={`${index}-${tick.label}`} className="min-w-0 flex-1 font-mono">
-                {tick.label}
-              </div>
-            ))}
-          </div>
-          {steps.length === 0 ? (
-            <div className="col-span-2 rounded-md border border-dashed p-6 text-center text-xs text-muted-foreground">
-              Asset timings will appear here for direct backend runs.
-            </div>
-          ) : null}
-          {steps.map((step) => (
-            <StepBar key={`${step.run_id}-${step.asset}`} step={step} bounds={bounds} now={now} />
-          ))}
-        </div>
-      </ScrollArea>
+      {scrollable ? (
+        <ScrollArea
+          className="h-72 min-w-0"
+          viewportClassName="h-full min-h-0"
+          data-testid="run-timeline-scroll"
+        >
+          {timeline}
+        </ScrollArea>
+      ) : (
+        <div className="min-w-0 overflow-hidden">{timeline}</div>
+      )}
       <div className="border-t p-2 lg:border-l lg:border-t-0">
         {[
           ["Preparing", counts.queued],
@@ -1002,10 +1051,16 @@ function StepBar({
   step,
   bounds,
   now,
+  rowHeight,
+  highlighted,
+  onHighlightedChange,
 }: {
   step: PipelineRunStep;
   bounds: { start: number; end: number };
   now: number;
+  rowHeight: number;
+  highlighted: boolean;
+  onHighlightedChange: (highlighted: boolean) => void;
 }) {
   const start = new Date(step.started_at ?? step.finished_at ?? bounds.start).getTime();
   const end = step.finished_at ? new Date(step.finished_at).getTime() : now;
@@ -1016,13 +1071,24 @@ function StepBar({
   );
   const left = Math.min(Math.max(0, rawLeft), 100 - width);
   const duration = formatDurationMs(Math.max(0, end - start));
+  const dense = rowHeight < 20;
+  const barInset = rowHeight < 16 ? 1 : 2;
   return (
     <>
       <Tooltip>
         <TooltipTrigger asChild>
           <span
-            className="min-w-0 break-words font-mono text-[11px] leading-4"
+            className={cn(
+              "flex min-w-0 items-center rounded-sm font-mono transition-colors",
+              dense ? "truncate text-[10px] leading-none" : "break-words text-[11px] leading-4",
+              highlighted && "bg-primary/10 text-foreground ring-1 ring-primary/30",
+            )}
             data-testid="run-timeline-asset-label"
+            data-asset={step.asset}
+            data-highlighted={highlighted ? "true" : "false"}
+            style={{ height: rowHeight }}
+            onPointerEnter={() => onHighlightedChange(true)}
+            onPointerLeave={() => onHighlightedChange(false)}
           >
             {step.asset}
           </span>
@@ -1030,15 +1096,22 @@ function StepBar({
         <TooltipContent>{step.asset}</TooltipContent>
       </Tooltip>
       <div
-        className="relative h-7 rounded bg-muted/40"
+        className={cn(
+          "relative rounded bg-muted/40 transition-colors",
+          highlighted && "bg-primary/10 ring-1 ring-inset ring-primary/30",
+        )}
         data-testid="run-timeline-track"
         data-asset={step.asset}
+        data-highlighted={highlighted ? "true" : "false"}
+        style={{ height: rowHeight }}
+        onPointerEnter={() => onHighlightedChange(true)}
+        onPointerLeave={() => onHighlightedChange(false)}
       >
         <Tooltip>
           <TooltipTrigger asChild>
             <div
               className={cn(
-                "absolute top-0.5 h-6 min-w-px rounded",
+                "absolute min-w-px rounded transition-[filter,box-shadow]",
                 step.status === "failed"
                   ? "bg-destructive"
                   : step.status === "running"
@@ -1046,10 +1119,16 @@ function StepBar({
                     : step.status === "success"
                       ? "bg-primary"
                       : "bg-muted-foreground/45",
+                highlighted && "brightness-110 ring-2 ring-foreground/35",
               )}
               data-testid="run-timeline-bar"
               data-status={step.status}
-              style={{ left: `${left}%`, width: `${width}%` }}
+              style={{
+                left: `${left}%`,
+                width: `${width}%`,
+                top: barInset,
+                height: Math.max(4, rowHeight - barInset * 2),
+              }}
             />
           </TooltipTrigger>
           <TooltipContent>
@@ -1069,11 +1148,15 @@ function RunEventsTable({
   steps,
   loading,
   assetIdsByName,
+  hoveredAsset,
+  onHoveredAssetChange,
 }: {
   run: PipelineRun;
   steps: PipelineRunStep[];
   loading: boolean;
   assetIdsByName: Map<string, string>;
+  hoveredAsset: string | null;
+  onHoveredAssetChange: (asset: string | null) => void;
 }) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const events = runEvents(run, steps);
@@ -1101,8 +1184,20 @@ function RunEventsTable({
           {events.map((event, index) => {
             const assetId = assetIdsByName.get(event.asset);
             const badge = runEventBadge(event.type);
+            const highlighted = hoveredAsset === event.asset;
             return (
-              <TableRow key={`${event.at}-${event.asset}-${event.type}-${index}`}>
+              <TableRow
+                key={`${event.at}-${event.asset}-${event.type}-${index}`}
+                className={cn(
+                  "transition-colors",
+                  highlighted && "bg-primary/10 hover:bg-primary/15",
+                )}
+                data-testid="run-event-row"
+                data-asset={event.asset}
+                data-highlighted={highlighted ? "true" : "false"}
+                onPointerEnter={() => onHoveredAssetChange(event.asset)}
+                onPointerLeave={() => onHoveredAssetChange(null)}
+              >
                 <TableCell className="h-8 py-1.5 font-mono text-xs text-muted-foreground">
                   {formatSchedulerDate(event.at)}
                 </TableCell>
@@ -1212,6 +1307,14 @@ function timelineBounds(run: PipelineRun, steps: PipelineRunStep[], now: number)
   const start = Math.min(...times, now);
   const end = Math.max(...times, run.status === "running" ? now : 0);
   return { start, end: Math.max(end, start + 1000) };
+}
+
+function timelineRowHeight(stepCount: number) {
+  if (stepCount >= 20) return 16;
+  if (stepCount <= 0) return 28;
+  // Keep the axis, padding, and up to 19 asset rows within the panel's
+  // 18rem height. Short runs retain the roomier 28px rows.
+  return Math.max(12, Math.min(28, Math.floor(244 / stepCount)));
 }
 
 function timelineTicks(bounds: { start: number; end: number }) {
