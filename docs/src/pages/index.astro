@@ -5,8 +5,8 @@ import { Font } from 'astro:assets';
 const repoUrl = 'https://github.com/renart-data/renart';
 const installCommand = 'curl -LsSf getrenart.com/install.sh | sh';
 const siteUrl = 'https://getrenart.com';
-const pageTitle = 'Renart public alpha - The all-in-one data pipeline IDE';
-const pageDescription = 'Renart is an all-in-one, open-source data pipeline IDE in public alpha: editor, canvas, notebooks, scheduler, type-checking, and staleness tracking in a single local binary. Pipelines are plain files in your git repo, running on the warehouse you already use.';
+const pageTitle = 'Renart public alpha - The whole data platform, in the box';
+const pageDescription = 'Renart is the whole data platform in one open-source package: editor, notebooks, scheduler, catalog, and staleness tracking, working on plain SQL and Python files in your git repo and running on the warehouse you already use.';
 const socialImage = `${siteUrl}/landing/og-image.png`;
 const trackingHead = import.meta.env.PUBLIC_RENART_TRACKING_HEAD?.trim() || '{{env "RENART_TRACKING_HEAD"}}';
 
@@ -115,7 +115,7 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
     <meta name="apple-mobile-web-app-title" content="Renart" />
     <meta name="theme-color" content="#0b0d0c" />
     <meta name="robots" content="index, follow" />
-    <meta name="keywords" content="Renart, data pipeline IDE, data pipeline scheduler, staleness tracking, data lineage, SQL notebooks, git-native data pipelines, data engineering, analytics engineering" />
+    <meta name="keywords" content="Renart, data pipelines, data pipeline tool, data pipeline scheduler, staleness tracking, incremental data builds, data lineage, SQL notebooks, git-native data pipelines, data engineering, analytics engineering" />
     <meta name="author" content="Renart" />
     <link rel="icon" href="/icons/icon-32.png" type="image/png" sizes="32x32" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" sizes="180x180" />
@@ -158,6 +158,7 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
           renart
         </a>
         <nav class="nav-links" aria-label="Primary navigation">
+          <a class="nav-link" href="#difference">Why Renart</a>
           <a class="nav-link" href="#lifecycle">Lifecycle</a>
           <a class="nav-link" href="#features">Features</a>
           <a class="nav-link" href="#principles">Principles</a>
@@ -184,12 +185,12 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
         </span>
 
         <h1>
-          The <span class="stroke">all-in-one</span><br />
-          <em>data pipeline IDE</em>
+          The whole <span class="stroke">data platform</span>,<br />
+          <em>in the box</em>.
         </h1>
 
         <p class="hero-sub">
-          The editor, the scheduler, and the freshness monitor — one open-source IDE for the whole pipeline lifecycle, with notebooks and lineage built in. Your pipeline is plain files in your git repo, running on the warehouse you already use. No glue code, no cloud.
+          Editor, notebooks, scheduler, catalog, freshness tracking — Renart ships the parts that usually live behind a hosted login in one open-source package, and knows exactly what to rebuild when you change a file. Runs on the warehouse you already use; starts on your laptop with one command.
         </p>
 
         <p class="alpha-note">
@@ -236,11 +237,50 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
         </div>
       </div>
 
+      <section class="block" id="difference">
+        <div class="eyebrow"><span class="bar"></span> The difference</div>
+        <h2 class="h2">It knows exactly <em>what changed</em>.</h2>
+        <p class="lede">
+          Renart fingerprints every asset — its code, its dependencies, its outputs. Edit one model and the canvas shows precisely what went stale downstream; build again and only that set reruns. Incremental builds, for your warehouse.
+        </p>
+
+        <div class="diff-media">
+          <img
+            src="/landing/lifecycle-staleness.webp"
+            alt="The Renart pipeline canvas after an edit: the changed staging asset is marked Edited, its downstream marts are marked Upstream changed, a new asset shows Never built, and untouched assets stay Fresh"
+            width="1176"
+            height="756"
+            srcset="/landing/lifecycle-staleness-480.webp 480w, /landing/lifecycle-staleness-768.webp 768w, /landing/lifecycle-staleness-1280.webp 1280w, /landing/lifecycle-staleness.webp 2352w"
+            sizes="(max-width: 760px) calc(100vw - 40px), (max-width: 1200px) calc(100vw - 56px), 1144px"
+            loading="lazy"
+            decoding="async"
+          />
+        </div>
+
+        <div class="diff-points">
+          <div class="diff-point">
+            <div class="card-tag">Fingerprints</div>
+            <h3>Content identity, not timestamps</h3>
+            <p>A fingerprint covers the canonicalized SQL, the config, the variables an asset consumes, and every upstream fingerprint. Reformatting changes nothing; a real change invalidates exactly its downstream cone.</p>
+          </div>
+          <div class="diff-point">
+            <div class="card-tag">Staleness</div>
+            <h3>State you can see</h3>
+            <p>Fresh, edited, upstream changed, never built — every asset wears its state on the canvas, per environment, updated as you work.</p>
+          </div>
+          <div class="diff-point">
+            <div class="card-tag">Builds</div>
+            <h3>Rerun only the stale set</h3>
+            <p>Building stale assets reruns exactly what an edit invalidated and skips everything that is still fresh — no full-refresh anxiety, no hand-picked node selectors.</p>
+          </div>
+        </div>
+      </section>
+
       <section class="block" id="lifecycle">
         <div class="eyebrow"><span class="bar"></span> The lifecycle</div>
         <h2 class="h2">One tool, the <em>whole lifecycle</em>.</h2>
         <p class="lede">
-          Shipping a pipeline usually means an editor, an orchestrator, a catalog, and a freshness monitor — four tools and a pile of glue between them. Renart covers the loop in one place, and everything it does ends up as reviewable files in your repository.
+          Shipping a pipeline usually means dbt for the SQL, Airflow to schedule it, a catalog to document it, and a freshness dashboard to tell you when it broke — four tools and the glue between them. Renart covers the loop in one place, and everything it does ends up as reviewable files in your repository.
         </p>
 
         <div class="lifecycle">
@@ -304,25 +344,6 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
             </div>
           </article>
 
-          <article class="life-row life-row--rev">
-            <div class="life-copy">
-              <div class="card-tag">04 · Trust</div>
-              <h3>Know what's fresh — rerun only what isn't</h3>
-              <p>Renart fingerprints every asset: its code, its dependencies, its outputs. The canvas shows what's fresh, stale, or missing at a glance, and an upstream change tells you exactly what it invalidates downstream. Rerun what changed, skip what didn't.</p>
-            </div>
-            <div class="life-media">
-              <img
-                src="/landing/lifecycle-staleness.webp"
-                alt="The Renart pipeline canvas after an edit: the changed staging asset is marked Edited, its downstream marts are marked Upstream changed, a new asset shows Never built, and untouched assets stay Fresh"
-                width="1176"
-                height="756"
-                srcset="/landing/lifecycle-staleness-480.webp 480w, /landing/lifecycle-staleness-768.webp 768w, /landing/lifecycle-staleness-1280.webp 1280w, /landing/lifecycle-staleness.webp 2352w"
-                sizes="(max-width: 760px) calc(100vw - 40px), (max-width: 1100px) calc(100vw - 56px), 635px"
-                loading="lazy"
-                decoding="async"
-              />
-            </div>
-          </article>
         </div>
       </section>
 
@@ -374,7 +395,7 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
           <article class="card span-3 card--text">
             <div class="card-content">
               <div class="card-tag">Git-native</div>
-              <h3>Every visual change is a reviewable diff</h3>
+              <h3>The repo is the product</h3>
               <p>Renart edits ordinary files. Move a node, rename an asset, change a materialization — it all lands as a plain diff your team can branch, review, and revert like any other code.</p>
             </div>
           </article>
@@ -398,14 +419,14 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
 
       <section class="block principles" id="principles">
         <div class="eyebrow"><span class="bar"></span> How it runs</div>
-        <h2 class="h2">One binary. <em>Your machine, your files.</em></h2>
+        <h2 class="h2">Runs where you are. <em>Your files, your warehouse.</em></h2>
         <p class="lede">
           Renart is infrastructure you can actually reason about: a single process on your machine, working on text files in your repository.
         </p>
 
         <div class="plist">
-          <div class="prow"><span class="check">✓</span><span><b>A single local binary.</b> Start <code>renart</code> inside your repository — no services to stand up, nothing to configure first.</span></div>
-          <div class="prow"><span class="check">✓</span><span><b>No account, no cloud.</b> No hosted control plane, no sign-up, no data leaving your environment.</span></div>
+          <div class="prow"><span class="check">✓</span><span><b>One install.</b> Start <code>renart</code> inside your repository — no services to stand up, nothing to configure first.</span></div>
+          <div class="prow"><span class="check">✓</span><span><b>Your data stays in your warehouse.</b> Renart connects to the databases you already run — it is not a platform you load your data into.</span></div>
           <div class="prow"><span class="check">✓</span><span><b>Your platform, your choice.</b> Run pipelines on DuckDB, Postgres, Snowflake, BigQuery, Redshift, and more.</span></div>
           <div class="prow"><span class="check">✓</span><span><b>Everything is readable text.</b> The entire pipeline definition is human-readable, diffable files — nothing hides in a database.</span></div>
           <div class="prow"><span class="check">✓</span><span><b>No lock-in.</b> Assets are ordinary <code>.sql</code>, <code>.py</code>, and <code>.yml</code> files — if you stop using Renart, your pipelines are still right there.</span></div>
@@ -415,7 +436,7 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
 
       <section class="final">
         <h2>From install to <em>scheduled pipeline</em> in one sitting.</h2>
-        <p>Install Renart, open your repository, and go from first query to a scheduled, freshness-tracked pipeline without leaving the IDE.</p>
+        <p>Install Renart, open your repository, and go from first query to a scheduled, freshness-tracked pipeline without switching tools.</p>
         <div class="ctas">
           <a href="/docs/installation/" class="btn btn-primary">Get started</a>
           <a href={repoUrl} class="btn btn-ghost">View on GitHub <span class="arrow">-&gt;</span></a>
@@ -444,11 +465,12 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
             />
             renart
           </a>
-          <p>The all-in-one data pipeline IDE. Public alpha, open source under Apache 2.0.</p>
+          <p>The whole data platform, in the box: scheduled, freshness-tracked pipelines from plain files in your repo. Public alpha, open source under Apache 2.0.</p>
         </div>
         <div class="foot-col">
           <h2>Product</h2>
           <ul>
+            <li><a href="#difference">Why Renart</a></li>
             <li><a href="#lifecycle">Lifecycle</a></li>
             <li><a href="#features">Features</a></li>
             <li><a href="#principles">Principles</a></li>
@@ -505,7 +527,7 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
           return;
         }
         const targets = document.querySelectorAll(
-          ['.block .eyebrow', '.block .h2', '.block .lede', '.life-row', '.bento .card', '.manifesto blockquote', '.manifesto .attrib', '.plist', '.final h2', '.final p', '.final .ctas', '.final .install'].join(', ')
+          ['.block .eyebrow', '.block .h2', '.block .lede', '.diff-media', '.diff-point', '.life-row', '.bento .card', '.manifesto blockquote', '.manifesto .attrib', '.plist', '.final h2', '.final p', '.final .ctas', '.final .install'].join(', ')
         );
         const observer = new IntersectionObserver(
           (entries) => {
@@ -804,6 +826,23 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
   .life-media:hover { border-color: var(--line-3); box-shadow: var(--shadow-pop); }
   .life-media img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
 
+  .diff-media {
+    margin-top: 56px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-4);
+    background: var(--bg-1);
+    overflow: hidden;
+    box-shadow: var(--shadow-card);
+    position: relative;
+  }
+  .diff-media::before { content: ''; position: absolute; inset: -1px; border-radius: inherit; pointer-events: none; z-index: 1; box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05); }
+  .diff-media img { width: 100%; height: auto; display: block; }
+  .diff-points { margin-top: 20px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  .diff-point { border: 1px solid var(--line); border-radius: var(--r-4); background: var(--bg-1); padding: 22px 24px; transition: border-color 0.2s; }
+  .diff-point:hover { border-color: var(--line-2); }
+  .diff-point h3 { font-size: 16px; font-weight: 500; letter-spacing: -0.01em; margin: 0 0 8px; }
+  .diff-point p { font-size: 14px; color: var(--fg-3); line-height: 1.55; margin: 0; text-wrap: pretty; }
+
   .bento { margin-top: 56px; display: grid; grid-template-columns: repeat(6, 1fr); grid-auto-rows: minmax(240px, auto); gap: 20px; }
   .card { border: 1px solid var(--line); border-radius: var(--r-4); background: var(--bg-1); overflow: hidden; display: flex; flex-direction: column; position: relative; transition: border-color 0.2s; }
   .card:hover { border-color: var(--line-2); }
@@ -861,6 +900,7 @@ const stackItems = ['DuckDB', 'Postgres', 'Snowflake', 'BigQuery', 'Redshift', '
 
   @media (max-width: 1100px) {
     .bento { grid-template-columns: repeat(2, 1fr); }
+    .diff-points { grid-template-columns: 1fr; }
     .span-3, .span-6 { grid-column: span 2; }
     .life-row, .life-row--rev { grid-template-columns: 1fr; gap: 24px; }
     .life-row--rev .life-copy { order: 1; }
