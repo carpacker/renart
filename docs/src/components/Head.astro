@@ -1,7 +1,7 @@
 ---
 import DefaultHead from '@astrojs/starlight/components/Head.astro';
 
-const trackingHead = import.meta.env.PUBLIC_RENART_TRACKING_HEAD?.trim() || '{{env "RENART_TRACKING_HEAD"}}';
+const trackingHead = import.meta.env.PUBLIC_RENART_TRACKING_HEAD?.trim() || '[[RENART env "RENART_TRACKING_HEAD" RENART]]';
 const robots = Astro.url.pathname === '/404/' ? 'noindex, nofollow' : 'index, follow';
 ---
 

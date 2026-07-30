@@ -8,7 +8,7 @@ const siteUrl = 'https://getrenart.com';
 const pageTitle = 'Renart public alpha - The whole data platform, in the box';
 const pageDescription = 'Renart is the whole data platform in one open-source package: editor, notebooks, scheduler, catalog, and staleness tracking, working on plain SQL and Python files in your git repo and running on the warehouse you already use.';
 const socialImage = `${siteUrl}/landing/og-image.png`;
-const trackingHead = import.meta.env.PUBLIC_RENART_TRACKING_HEAD?.trim() || '{{env "RENART_TRACKING_HEAD"}}';
+const trackingHead = import.meta.env.PUBLIC_RENART_TRACKING_HEAD?.trim() || '[[RENART env "RENART_TRACKING_HEAD" RENART]]';
 
 function readGitValue(command: string, fallback: string) {
   try {

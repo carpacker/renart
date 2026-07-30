@@ -27,6 +27,9 @@
 	# For build-time injection instead, set PUBLIC_RENART_TRACKING_HEAD before `astro build`.
 	templates {
 		mime text/html
+		# Keep documentation examples that use Go/Jinja's {{ ... }} syntax
+		# from being interpreted as server-side templates.
+		between [[RENART RENART]]
 	}
 
 	file_server

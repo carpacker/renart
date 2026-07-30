@@ -178,3 +178,4 @@ web/test-results/
 /renart
 renart-gui
 /.release/
+docs/.pnpm-store/
