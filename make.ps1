@@ -86,9 +86,21 @@ function Get-Pnpm {
 }
 
 function Invoke-Pnpm {
-    param([string[]]$ArgList, [hashtable]$Env = @{})
+    # IMPORTANT: runs *inside* $Dir rather than using pnpm's `--dir` flag.
+    #
+    # This repo has no package.json at its root - only web/, docs/, and
+    # extensions/vscode/ have one. Corepack resolves the pnpm version from the
+    # "packageManager" field of the CWD's package.json, so invoking
+    # `corepack pnpm --dir web ...` from the repo root finds nothing, falls back
+    # to whatever pnpm version corepack has globally activated, and then pnpm
+    # reads web/package.json, sees the 10.33.0 pin, and refuses to run.
+    # Running from inside web/ lets corepack resolve 10.33.0 correctly.
+    param([string]$Dir, [string[]]$ArgList, [hashtable]$Env = @{})
     $p = Get-Pnpm
-    Invoke-Checked -Exe $p.Exe -ArgList (@($p.Prefix) + $ArgList) -Env $Env
+    Push-Location (Join-Path $RepoRoot $Dir)
+    try {
+        Invoke-Checked -Exe $p.Exe -ArgList (@($p.Prefix) + $ArgList) -Env $Env
+    } finally { Pop-Location }
 }
 
 # ---------------------------------------------------------------- targets ---
@@ -129,10 +141,21 @@ function Target-Doctor {
 
     if (Get-Command corepack -ErrorAction SilentlyContinue) {
         Write-Ok "corepack present"
+        # Resolve from inside web/ - the repo root has no package.json, so
+        # corepack would otherwise report its global default, not the pin.
+        Push-Location (Join-Path $RepoRoot 'web')
         try {
             $v = (& corepack pnpm --version 2>&1 | Select-Object -Last 1).ToString().Trim()
-            if ($v -eq $WantPnpm) { Write-Ok "pnpm $v" } else { Write-Warn2 "pnpm $v (repo pins $WantPnpm)" }
-        } catch { Write-Warn2 "corepack present but 'corepack pnpm' failed; run: corepack enable" }
+            if ($v -eq $WantPnpm) {
+                Write-Ok "pnpm $v (resolved in web/)"
+            } else {
+                Write-Bad "pnpm resolves to $v in web/, but the repo pins $WantPnpm"
+                Write-Host "        Fix: corepack install --global pnpm@$WantPnpm" -ForegroundColor DarkGray
+                $ok = $false
+            }
+        } catch {
+            Write-Warn2 "corepack present but 'corepack pnpm' failed; run: corepack enable"
+        } finally { Pop-Location }
     } else { Write-Bad "corepack not found (ships with Node >=16.9); run: corepack enable"; $ok = $false }
 
     Write-Step "Native window helper (WebView2)"
@@ -169,13 +192,13 @@ function Target-Doctor {
 
 function Target-Deps {
     Write-Step "pnpm install (web)"
-    Invoke-Pnpm @('--dir', 'web', 'install')
+    Invoke-Pnpm -Dir 'web' -ArgList @('install')
 }
 
 function Target-WebBuild {
     if (-not (Test-Path (Join-Path $RepoRoot 'web\node_modules'))) { Target-Deps }
     Write-Step "Building frontend -> web/dist"
-    Invoke-Pnpm @('--dir', 'web', 'build')
+    Invoke-Pnpm -Dir 'web' -ArgList @('build')
 }
 
 function Target-GoBuild {
@@ -261,8 +284,9 @@ function Target-Dev {
 
     $p = Get-Pnpm
     $pnpmInvocation = (@($p.Exe) + $p.Prefix) -join ' '
-    $frontendCmd = "`$env:PROXY_TARGET='http://127.0.0.1:$BackendPort'; $pnpmInvocation --dir web dev --port $FrontendPort"
-    Start-Process $shell -ArgumentList '-NoExit', '-Command', "Set-Location '$RepoRoot'; $frontendCmd"
+    # Run from web/, not the repo root - see the note on Invoke-Pnpm.
+    $frontendCmd = "`$env:PROXY_TARGET='http://127.0.0.1:$BackendPort'; $pnpmInvocation dev --port $FrontendPort"
+    Start-Process $shell -ArgumentList '-NoExit', '-Command', "Set-Location '$(Join-Path $RepoRoot 'web')'; $frontendCmd"
 
     Start-Sleep -Seconds 3
     Start-Process "http://127.0.0.1:$FrontendPort"
@@ -272,7 +296,7 @@ function Target-Test {
     Write-Step "go test ./..."
     Invoke-Checked -Exe 'go' -ArgList @('test', '-p=1', './...') -Env @{ CGO_ENABLED = '0' }
     Write-Step "vitest"
-    Invoke-Pnpm @('--dir', 'web', 'test:unit')
+    Invoke-Pnpm -Dir 'web' -ArgList @('test:unit')
 }
 
 function Target-Check {
@@ -280,7 +304,7 @@ function Target-Check {
     Invoke-Checked -Exe 'go' -ArgList @('vet', './...') -Env @{ CGO_ENABLED = '0' }
     Target-Test
     Write-Step "frontend check (format, lint, typecheck, build)"
-    Invoke-Pnpm @('--dir', 'web', 'check')
+    Invoke-Pnpm -Dir 'web' -ArgList @('check')
 }
 
 function Target-Clean {

@@ -52,6 +52,26 @@ Rebuild with `.\make.ps1 go-build`, or use `.\make.ps1 dev` and open port 5173.
 or point `RENART_GUI_BINARY` / `--gui-binary` at one. Without it Renart falls
 back to serving the UI in your browser, which still works.
 
+**"This project is configured to use 10.33.0 of pnpm. Your current pnpm is v11.x"**
+The repo has **no `package.json` at its root** — only `web/`, `docs/`, and
+`extensions/vscode/` have one. Corepack resolves the pnpm version from the
+`packageManager` field of the *current directory's* package.json, so
+`corepack pnpm --dir web install` run from the repo root finds nothing, falls
+back to whatever pnpm corepack has globally activated, and then pnpm reads
+`web/package.json`, sees the 10.33.0 pin, and refuses.
+
+The fix is to invoke corepack from inside the package directory, which
+`make.ps1` now does:
+
+```powershell
+Push-Location web; corepack pnpm install; Pop-Location
+```
+
+Don't work around this with `--pm-on-fail=ignore`. pnpm 11 ignores the
+`pnpm.overrides` block in `web/package.json` (those are pinned security
+overrides) and may rewrite `pnpm-lock.yaml` to a newer lockfile format, which
+would put a large unnecessary diff between you and upstream.
+
 Also: PowerShell doesn't search the current directory, so it's `.\renart.exe`,
 not `renart`.
 
