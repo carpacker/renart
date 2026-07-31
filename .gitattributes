@@ -1,0 +1,39 @@
+# Line-ending policy.
+#
+# This repo is developed on Linux/macOS and its toolchain (bash scripts, Go
+# golden files, shell shebangs) assumes LF. Without this file, a Windows
+# checkout can rewrite the entire tree to CRLF, which turns every commit into a
+# whole-file diff and breaks golden-file tests.
+#
+# `eol=lf` forces LF in the working tree on every platform, regardless of the
+# developer's global core.autocrlf setting.
+
+* text=auto eol=lf
+
+# Explicitly binary — never touch these.
+*.webp   binary
+*.png    binary
+*.ico    binary
+*.svg    text eol=lf
+*.woff2  binary
+*.wasm   binary
+*.cast   binary
+*.a      binary
+*.so     binary
+*.dylib  binary
+*.dll    binary
+*.exe    binary
+
+# Scripts that must keep LF or they break on execution.
+*.sh          text eol=lf
+Makefile      text eol=lf
+scripts/*     text eol=lf
+*.mjs         text eol=lf
+
+# Windows-native scripts genuinely want CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Lockfiles: keep them stable, don't diff them in review.
+pnpm-lock.yaml -diff linguist-generated
+go.sum         -diff
