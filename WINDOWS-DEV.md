@@ -18,7 +18,38 @@ CI pins these versions; mismatches cause confusing failures.
 | Go | 1.26.5 | https://go.dev/dl/ |
 | Node | 22.22.1 | https://nodejs.org/ |
 | pnpm | 10.33.0 | via `corepack enable` — the repo pins it in `package.json` |
+| mingw-w64 gcc | any recent | **required** — `renart.exe` needs cgo |
 | WebView2 | any | ships with Windows 11; needed by `renart-gui.exe` |
+
+### The C compiler is not optional
+
+`internal/web/adbcutil/cancel.go` does `import "C"`, and the server reaches it
+via `main → cmd → clientapi → service → duckdbsession → adbcutil`. So every
+build of the server needs `CGO_ENABLED=1` and a working gcc. Building with
+`CGO_ENABLED=0` fails with:
+
+```
+imports renart/internal/web/adbcutil: build constraints exclude all Go files
+```
+
+That message is misleading — there are no build tags in that package. The
+excluding constraint is the implicit `cgo` one.
+
+```powershell
+winget install --id=MSYS2.MSYS2 -e
+C:\msys64\usr\bin\pacman.exe -S --noconfirm mingw-w64-ucrt-x86_64-gcc
+```
+
+Then add `C:\msys64\ucrt64\bin` to PATH and open a new terminal.
+
+Only `renart-gui.exe` builds without cgo — `scripts/build_standalone_helper.sh`
+sets `CGO_ENABLED=0` for its Windows branch, and `make.ps1` mirrors that.
+
+`make.ps1 go-build` also passes `-tags no_duckdb_arrow -buildmode=exe`, matching
+the `renart-duckdb-windows-amd64` target in `.goreleaser.yaml` — the only
+Windows build configuration upstream actually ships. If you ever hit missing
+`KnownFolders.h` / `ShlObj.h` from an older mingw, the release build works
+around it with `CGO_CPPFLAGS=-I<repo>/scripts/mingw-compat`.
 
 Check everything at once:
 

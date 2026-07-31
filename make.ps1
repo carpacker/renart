@@ -9,7 +9,11 @@
 
   Windows does not need the Bruin SQL-parser CGo stub that the Makefile builds:
   that shim only exists to satisfy an unconditional native linker flag on
-  Linux/macOS. Windows builds run with CGO_ENABLED=0.
+  Linux/macOS.
+
+  Windows DOES need a C compiler. internal/web/adbcutil uses cgo, and the
+  server imports it transitively, so renart.exe requires CGO_ENABLED=1 and a
+  mingw-w64 gcc on PATH. Only renart-gui.exe builds without cgo.
 
 .EXAMPLE
   .\make.ps1 help
@@ -62,6 +66,35 @@ function Invoke-Checked {
     } finally {
         foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
     }
+}
+
+function Get-CCompiler {
+    foreach ($cc in 'gcc', 'x86_64-w64-mingw32-gcc', 'clang') {
+        $c = Get-Command $cc -ErrorAction SilentlyContinue
+        if ($c) { return $c.Source }
+    }
+    # Common MSYS2 / WinLibs locations that may not be on PATH yet.
+    foreach ($p in 'C:\msys64\ucrt64\bin\gcc.exe', 'C:\msys64\mingw64\bin\gcc.exe') {
+        if (Test-Path $p) { return $p }
+    }
+    return $null
+}
+
+function Assert-CCompiler {
+    if (Get-CCompiler) { return }
+    throw @"
+No C compiler found, and renart.exe cannot be built without one.
+
+internal/web/adbcutil uses cgo (import "C"), and the server imports it
+transitively, so CGO_ENABLED=1 and a working gcc are mandatory on Windows.
+
+Install MSYS2 and the UCRT64 GCC toolchain:
+
+    winget install --id=MSYS2.MSYS2 -e
+    C:\msys64\usr\bin\pacman.exe -S --noconfirm mingw-w64-ucrt-x86_64-gcc
+
+Then add C:\msys64\ucrt64\bin to PATH and open a new terminal.
+"@
 }
 
 function Get-Shell {
@@ -158,6 +191,16 @@ function Target-Doctor {
         } finally { Pop-Location }
     } else { Write-Bad "corepack not found (ships with Node >=16.9); run: corepack enable"; $ok = $false }
 
+    $cc = Get-CCompiler
+    if ($cc) { Write-Ok "C compiler: $cc" }
+    else {
+        Write-Bad "no C compiler - renart.exe needs cgo (internal/web/adbcutil)"
+        Write-Host "        winget install --id=MSYS2.MSYS2 -e" -ForegroundColor DarkGray
+        Write-Host "        C:\msys64\usr\bin\pacman.exe -S --noconfirm mingw-w64-ucrt-x86_64-gcc" -ForegroundColor DarkGray
+        Write-Host "        then add C:\msys64\ucrt64\bin to PATH" -ForegroundColor DarkGray
+        $ok = $false
+    }
+
     Write-Step "Native window helper (WebView2)"
     # Check both the per-machine and per-user keys: a non-admin install only
     # writes HKCU, and checking HKLM alone gives a false negative.
@@ -206,8 +249,22 @@ function Target-GoBuild {
         throw "web/dist is missing. Run '.\make.ps1 web-build' first, or the binary will have no embedded UI."
     }
     Write-Step "Building renart.exe (UI embedded)"
+    Assert-CCompiler
     # No -tags webdev: that tag deliberately skips embedding web/dist.
-    Invoke-Checked -Exe 'go' -ArgList @('build', '-trimpath', '-o', 'renart.exe', '.') -Env @{ CGO_ENABLED = '0' }
+    #
+    # CGO is REQUIRED. internal/web/adbcutil/cancel.go does `import "C"`, and
+    # main -> cmd -> clientapi -> service -> duckdbsession -> adbcutil, so every
+    # build of the server needs a C compiler. Building with CGO_ENABLED=0 fails
+    # with "build constraints exclude all Go files in .../adbcutil".
+    #
+    # Flags mirror .goreleaser.yaml's renart-duckdb-windows-amd64 target, which
+    # is the only Windows configuration upstream actually ships.
+    Invoke-Checked -Exe 'go' -ArgList @(
+        'build', '-trimpath',
+        '-tags', 'no_duckdb_arrow',
+        '-buildmode=exe',
+        '-o', 'renart.exe', '.'
+    ) -Env @{ CGO_ENABLED = '1' }
     Write-Ok "renart.exe"
 }
 
@@ -279,7 +336,7 @@ function Target-Dev {
     # PowerShell has no job-control equivalent of dev.sh's process-group kill,
     # so each server gets its own window rather than a backgrounded job that
     # would orphan Vite's esbuild children on exit.
-    $backendCmd = "`$env:CGO_ENABLED='0'; & '$air' -- web --no-open --host 127.0.0.1 --port $BackendPort '$Workspace'"
+    $backendCmd = "`$env:CGO_ENABLED='1'; & '$air' -- web --no-open --host 127.0.0.1 --port $BackendPort '$Workspace'"
     Start-Process $shell -ArgumentList '-NoExit', '-Command', "Set-Location '$RepoRoot'; $backendCmd"
 
     $p = Get-Pnpm
@@ -294,14 +351,14 @@ function Target-Dev {
 
 function Target-Test {
     Write-Step "go test ./..."
-    Invoke-Checked -Exe 'go' -ArgList @('test', '-p=1', './...') -Env @{ CGO_ENABLED = '0' }
+    Invoke-Checked -Exe 'go' -ArgList @('test', '-p=1', './...') -Env @{ CGO_ENABLED = '1' }
     Write-Step "vitest"
     Invoke-Pnpm -Dir 'web' -ArgList @('test:unit')
 }
 
 function Target-Check {
     Write-Step "go vet ./..."
-    Invoke-Checked -Exe 'go' -ArgList @('vet', './...') -Env @{ CGO_ENABLED = '0' }
+    Invoke-Checked -Exe 'go' -ArgList @('vet', './...') -Env @{ CGO_ENABLED = '1' }
     Target-Test
     Write-Step "frontend check (format, lint, typecheck, build)"
     Invoke-Pnpm -Dir 'web' -ArgList @('check')
