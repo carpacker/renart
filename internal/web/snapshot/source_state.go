@@ -49,7 +49,8 @@ func CollectSourceState(pipelineDir string) (SourceState, error) {
 }
 
 // Equal reports whether two captures identify the same manifest file set and
-// unchanged file metadata. os.SameFile also catches atomic replacements that
+// unchanged file metadata. On platforms where os.SameFile preserves the
+// pre-replacement file identity, it also catches atomic replacements that
 // preserve size and modification time.
 func (s SourceState) Equal(other SourceState) bool {
 	if len(s.files) != len(other.files) {

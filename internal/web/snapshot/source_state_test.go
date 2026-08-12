@@ -3,6 +3,7 @@ package snapshot
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -31,7 +32,7 @@ func TestSourceStateDetectsSameSizeInPlaceWrites(t *testing.T) {
 	assert.False(t, before.Equal(after))
 }
 
-func TestSourceStateDetectsAtomicReplacementWithPreservedMetadata(t *testing.T) {
+func TestSourceStateAtomicReplacementWithPreservedMetadataFollowsPlatformIdentity(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -49,7 +50,11 @@ func TestSourceStateDetectsAtomicReplacementWithPreservedMetadata(t *testing.T) 
 	after, err := CollectSourceState(root)
 	require.NoError(t, err)
 
-	assert.False(t, before.Equal(after), "inode identity must catch replacements even when size and mtime match")
+	if runtime.GOOS == "windows" {
+		assert.True(t, before.Equal(after), "Windows SameFile resolves FileInfo identity from the replacement path; SourceState remains metadata-only")
+		return
+	}
+	assert.False(t, before.Equal(after), "file identity must catch replacements even when size and mtime match")
 }
 
 func TestSourceStateUsesSnapshotManifestExclusions(t *testing.T) {
