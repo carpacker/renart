@@ -127,14 +127,17 @@ original. Check `plans/README.md` for the current index and status.
 ## Local tooling
 
 - Go is at `/usr/local/go`. If `go` is not on `PATH`, use `/usr/local/go/bin/go`.
-- **Hot-reload dev:** `make dev` (or `scripts/dev.sh [workspace]`) runs the Go
+- **Hot-reload dev:** On Linux/macOS, `make dev` (or `scripts/dev.sh [workspace]`)
+  runs the Go
   backend under [`air`](https://github.com/air-verse/air) (rebuild + restart on
   any `.go` change, `.air.toml`) and the Vite frontend with HMR together. Open
   the printed Vite URL (`:5173`); it proxies `/api` to the backend (`:3000`).
   The backend builds with `-tags webdev` so it needs no `web/dist` — see
   `web/embed_dev.go`. Defaults to the `example/example` workspace; override with
-  `make dev WORKSPACE=path` or `BACKEND_PORT` / `FRONTEND_PORT` env vars. air is
-  installed on first run if missing.
+  `make dev WORKSPACE=path` or `BACKEND_PORT` / `FRONTEND_PORT` env vars. On
+  Windows, run `./make.ps1 dev [workspace]`; its `-BackendPort` and
+  `-FrontendPort` parameters provide the same port overrides. air is installed
+  on first run if missing.
 
 ## Validation
 

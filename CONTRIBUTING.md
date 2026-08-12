@@ -12,7 +12,8 @@ bug reports and small, well-tested changes are especially useful.
 
 ## Development
 
-Use `make dev` to run the Go backend and Vite frontend together. See
+Use `make dev` to run the Go backend and Vite frontend together. On Windows,
+use `./make.ps1 dev` from PowerShell instead. See
 [`AGENTS.md`](AGENTS.md), [`architecture/`](architecture/), and the relevant
 document under [`plans/`](plans/) before changing a subsystem.
 

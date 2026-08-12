@@ -35,11 +35,11 @@ file-identity assumption in a test; it is now documented and asserted honestly.
 
 ## Other hygiene
 
-### 2. `make dev` requires `make` - not present on every Windows box
+### 2. Windows dev launcher documentation is complete
 
-- The fork added `make.ps1` (commit `8952c51`), but README and AGENTS still say
-  `make dev`. On a box without `make`, the documented dev command fails;
-  the PowerShell `make.ps1 dev` command works. Document both.
+- The fork added `make.ps1` (commit `8952c51`), but CONTRIBUTING and AGENTS said
+  `make dev`. The contributor and agent guidance now name the PowerShell
+  `./make.ps1 dev [workspace]` equivalent and its port parameters.
 
 ### 3. EOL
 
